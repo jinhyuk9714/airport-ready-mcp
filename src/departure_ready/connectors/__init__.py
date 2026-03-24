@@ -1,0 +1,1 @@
+"""Official-source connector adapters."""

@@ -1,0 +1,23 @@
+model = "gpt-5.4"
+model_provider = "openai"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "high"
+personality = "pragmatic"
+web_search = "cached"
+
+[features]
+shell_snapshot = true
+multi_agent = true
+personality = true
+shell_tool = true
+
+# Example of how to register this repo's MCP server for project-local Codex use
+# after you implement more tools:
+#
+# [mcp_servers.departure_ready_local]
+# command = "uv"
+# args = ["run", "departure-ready-mcp"]
+# required = false
+# startup_timeout_sec = 20
+# tool_timeout_sec = 45
