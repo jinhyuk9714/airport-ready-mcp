@@ -24,6 +24,7 @@ from departure_ready.connectors.policy import (
 from departure_ready.contracts import Envelope, ErrorEnvelope, Freshness, SourceKind, SourceRef
 from departure_ready.domain.models import ParkingLotSnapshot, ParkingPayload
 from departure_ready.services.common import (
+    await_if_needed,
     envelope_from_items,
     unsupported_domain_envelope,
 )
@@ -179,11 +180,7 @@ def _get_t1_slot_lots(
 
 
 def _await_if_needed(result):
-    import asyncio
-
-    if hasattr(result, "__await__"):
-        return asyncio.run(result)
-    return result
+    return await_if_needed(result)
 
 
 def _filter_lots_by_terminal(

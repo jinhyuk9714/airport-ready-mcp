@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from urllib.parse import urlparse
 
@@ -8,6 +7,7 @@ from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 
 from departure_ready.services.baggage import build_baggage_envelope
+from departure_ready.services.common import run_async_blocking
 from departure_ready.services.customs import build_customs_envelope
 from departure_ready.services.facilities import (
     build_facilities_envelope,
@@ -142,7 +142,7 @@ def tool_find_facilities(
     category: str | None = None,
     query: str | None = None,
 ) -> dict:
-    envelope = asyncio.run(
+    envelope = run_async_blocking(
         build_facilities_envelope(
             get_settings(),
             airport_code,
@@ -161,7 +161,7 @@ def tool_find_shops(
     category: str | None = None,
     query: str | None = None,
 ) -> dict:
-    envelope = asyncio.run(
+    envelope = run_async_blocking(
         build_shops_envelope(
             get_settings(),
             airport_code,

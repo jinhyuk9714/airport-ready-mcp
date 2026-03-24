@@ -1,25 +1,41 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi.testclient import TestClient
+from mcp.client.session import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
 from departure_ready.api.app import create_app
+from departure_ready.services.facilities import (
+    build_facilities_envelope,
+    build_shops_envelope,
+)
+from departure_ready.services.flight import build_flight_envelope
 from departure_ready.services.guide import build_coverage_envelope, build_guide_envelope
 from departure_ready.services.parking import build_parking_envelope
 from departure_ready.services.readiness import build_readiness_envelope
-from departure_ready.settings import Settings
+from departure_ready.settings import Settings, get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
+LOCAL_BASE_URL = "http://testserver"
+REQUIRED_HOSTED_ENV = (
+    "DEPARTURE_READY_PUBLIC_HTTP_URL",
+    "DEPARTURE_READY_KAC_SERVICE_KEY",
+    "DEPARTURE_READY_IIAC_SERVICE_KEY",
+)
 
 
 def build_smoke_report(settings: Settings | None = None) -> dict[str, object]:
@@ -34,15 +50,29 @@ def build_launch_report(settings: Settings | None = None) -> dict[str, object]:
         check_api_boot(),
         check_mcp_stdio_boot(),
         check_remote_mcp_mount(),
+        check_remote_mcp_coverage_tool(),
+        check_remote_mcp_readiness_parity(settings),
     ]
     return _report_from_checks(checks)
 
 
-def build_hosted_canary_report(settings: Settings | None = None) -> dict[str, object]:
+def build_hosted_canary_report(
+    settings: Settings | None = None,
+    *,
+    strict: bool = False,
+) -> dict[str, object]:
     settings = settings or Settings()
+    checks: list[dict[str, object]] = []
+
+    if strict:
+        config_check = _hosted_ops_config_check(settings)
+        checks.append(config_check)
+        if not config_check["ok"]:
+            return _report_from_checks(checks)
+
     http_url = settings.resolved_public_http_url
     mcp_url = settings.resolved_public_mcp_url
-    checks: list[dict[str, object]] = []
+
     if not http_url:
         checks.append(
             _check(
@@ -53,7 +83,8 @@ def build_hosted_canary_report(settings: Settings | None = None) -> dict[str, ob
             )
         )
     else:
-        checks.append(_hosted_http_canary(http_url))
+        checks.extend(_hosted_http_canary_checks(http_url))
+
     if not mcp_url:
         checks.append(
             _check(
@@ -67,7 +98,8 @@ def build_hosted_canary_report(settings: Settings | None = None) -> dict[str, ob
             )
         )
     else:
-        checks.append(_hosted_mcp_canary(mcp_url))
+        checks.extend(asyncio.run(_hosted_mcp_canary_checks(mcp_url, http_url=http_url)))
+
     return _report_from_checks(checks)
 
 
@@ -124,11 +156,12 @@ def check_mcp_stdio_boot(timeout_sec: float = 0.5) -> dict[str, object]:
 
 
 def check_remote_mcp_mount() -> dict[str, object]:
-    with TestClient(create_app(), base_url="http://127.0.0.1:8000") as client:
-        response = client.get(
-            "/mcp/",
-            headers={"accept": "application/json, text/event-stream"},
-        )
+    with _local_public_http_url():
+        with TestClient(create_app(), base_url=LOCAL_BASE_URL) as client:
+            response = client.get(
+                "/mcp/",
+                headers={"accept": "application/json, text/event-stream"},
+            )
     ok = response.status_code in {400, 406}
     return _check(
         name="mcp_remote_mount",
@@ -138,17 +171,27 @@ def check_remote_mcp_mount() -> dict[str, object]:
     )
 
 
+def check_remote_mcp_coverage_tool() -> dict[str, object]:
+    return asyncio.run(_check_remote_mcp_coverage_tool_async())
+
+
+def check_remote_mcp_readiness_parity(settings: Settings | None = None) -> dict[str, object]:
+    runtime_settings = settings or Settings()
+    return asyncio.run(_check_remote_mcp_readiness_parity_async(runtime_settings))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["smoke", "launch", "hosted"], default="launch")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--strict-hosted", action="store_true")
     args = parser.parse_args()
 
     settings = Settings()
     if args.mode == "smoke":
         report = build_smoke_report(settings)
     elif args.mode == "hosted":
-        report = build_hosted_canary_report(settings)
+        report = build_hosted_canary_report(settings, strict=args.strict_hosted)
     else:
         report = build_launch_report(settings)
 
@@ -245,17 +288,36 @@ def _parking_check(
 
 def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
     checks: list[dict[str, object]] = []
+    tomorrow = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+
     if settings.iiac_service_key:
-        envelope = build_parking_envelope("ICN", settings=settings)
-        checks.append(
-            _check(
-                name="iiac_canary",
-                ok=envelope.ok,
-                detail="IIAC canary executed." if envelope.ok else envelope.data.message,
-                status="ok" if envelope.ok else "fail",
-                airport_code="ICN",
-                coverage_note=envelope.meta.coverage_note,
-            )
+        checks.extend(
+            [
+                _parking_contract_check(
+                    name="iiac_parking_canary",
+                    envelope=build_parking_envelope("ICN", settings=settings),
+                    require_lots=True,
+                ),
+                _flight_contract_check(
+                    name="iiac_future_flight_canary",
+                    envelope=build_flight_envelope(
+                        "ICN",
+                        travel_date=tomorrow,
+                        settings=settings,
+                    ),
+                    disallow_unavailable=True,
+                ),
+                _facility_contract_check(
+                    name="iiac_facilities_canary",
+                    envelope=asyncio.run(build_facilities_envelope(settings, "ICN")),
+                    require_matches=True,
+                ),
+                _facility_contract_check(
+                    name="iiac_shops_canary",
+                    envelope=asyncio.run(build_shops_envelope(settings, "ICN")),
+                    require_matches=True,
+                ),
+            ]
         )
     else:
         checks.append(
@@ -268,16 +330,30 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
         )
 
     if settings.kac_service_key:
-        envelope = build_parking_envelope("GMP", settings=settings)
-        checks.append(
-            _check(
-                name="kac_canary",
-                ok=envelope.ok,
-                detail="KAC canary executed." if envelope.ok else envelope.data.message,
-                status="ok" if envelope.ok else "fail",
-                airport_code="GMP",
-                coverage_note=envelope.meta.coverage_note,
-            )
+        checks.extend(
+            [
+                _parking_contract_check(
+                    name="kac_parking_canary",
+                    envelope=build_parking_envelope("GMP", settings=settings),
+                    require_lots=True,
+                ),
+                _readiness_contract_check(
+                    name="kac_readiness_canary",
+                    envelope=build_readiness_envelope("GMP", settings=settings),
+                    require_operational_signals=True,
+                ),
+                _facility_contract_check(
+                    name="kac_facilities_canary",
+                    envelope=asyncio.run(
+                        build_facilities_envelope(
+                            settings,
+                            "PUS",
+                            category="wheelchair",
+                        )
+                    ),
+                    require_matches=True,
+                ),
+            ]
         )
     else:
         checks.append(
@@ -292,52 +368,316 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
     return checks
 
 
-def _hosted_http_canary(base_url: str) -> dict[str, object]:
+def _hosted_ops_config_check(settings: Settings) -> dict[str, object]:
+    missing = [
+        key
+        for key, value in (
+            ("DEPARTURE_READY_PUBLIC_HTTP_URL", settings.resolved_public_http_url),
+            ("DEPARTURE_READY_KAC_SERVICE_KEY", settings.kac_service_key),
+            ("DEPARTURE_READY_IIAC_SERVICE_KEY", settings.iiac_service_key),
+        )
+        if not value
+    ]
+    return _check(
+        name="hosted_ops_config",
+        ok=not missing,
+        detail=(
+            "Hosted canary has the required ops configuration."
+            if not missing
+            else f"Missing required hosted canary config: {', '.join(missing)}"
+        ),
+        required_env=list(REQUIRED_HOSTED_ENV),
+        resolved_public_http_url=settings.resolved_public_http_url,
+        resolved_public_mcp_url=settings.resolved_public_mcp_url,
+        missing=missing,
+    )
+
+
+def _hosted_http_canary_checks(base_url: str) -> list[dict[str, object]]:
     tomorrow = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+    return [
+        _hosted_health_check(base_url),
+        _hosted_json_envelope_check(
+            name="hosted_coverage_canary",
+            base_url=base_url,
+            path="/v1/coverage",
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_guide_canary",
+            base_url=base_url,
+            path="/v1/guide",
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_icn_parking_canary",
+            base_url=base_url,
+            path="/v1/parking",
+            params={"airport_code": "ICN"},
+            disallow_unavailable=True,
+            require_count_field=("data.lots", 1),
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_icn_future_flight_canary",
+            base_url=base_url,
+            path="/v1/flight-status",
+            params={"airport_code": "ICN", "travel_date": tomorrow},
+            disallow_unavailable=True,
+            expected_freshness="daily",
+            require_truthy_fields=["data.selected_flight"],
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_gmp_readiness_canary",
+            base_url=base_url,
+            path="/v1/readiness",
+            params={"airport_code": "GMP"},
+            disallow_unavailable=True,
+            require_count_field=("data.operational_signals", 1),
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_pus_facilities_canary",
+            base_url=base_url,
+            path="/v1/facilities",
+            params={"airport_code": "PUS", "category": "wheelchair"},
+            disallow_unavailable=True,
+            require_count_field=("data.matches", 1),
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_icn_shops_canary",
+            base_url=base_url,
+            path="/v1/shops",
+            params={"airport_code": "ICN"},
+            disallow_unavailable=True,
+            require_count_field=("data.matches", 1),
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_baggage_canary",
+            base_url=base_url,
+            path="/v1/baggage-check",
+            params={
+                "trip_type": "international",
+                "item_query": "lotion",
+                "liquid_ml": 120,
+            },
+            validator=lambda payload: payload["data"]["carry_on_allowed"] is False,
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_customs_canary",
+            base_url=base_url,
+            path="/v1/customs-rules",
+            params={"purchase_value_usd": 900},
+            validator=lambda payload: payload["data"]["declaration_required"] is True,
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_self_service_canary",
+            base_url=base_url,
+            path="/v1/self-service-options",
+            params={"airport_code": "ICN"},
+            validator=lambda payload: "ICN" == payload["data"]["airport_code"],
+        ),
+        _hosted_json_envelope_check(
+            name="hosted_priority_lane_canary",
+            base_url=base_url,
+            path="/v1/priority-lane-eligibility",
+            params={"airport_code": "ICN", "user_profile": "pregnant traveler"},
+            validator=lambda payload: payload["data"]["eligible"] is True,
+        ),
+    ]
+
+
+async def _hosted_mcp_canary_checks(
+    mcp_url: str,
+    *,
+    http_url: str | None = None,
+) -> list[dict[str, object]]:
+    checks = [_hosted_mcp_mount_canary(mcp_url)]
+
+    try:
+        coverage = await _call_remote_tool(mcp_url, "tool_get_coverage", {})
+        checks.append(
+            _check(
+                name="hosted_mcp_coverage_tool",
+                ok=_meta_contract_present(coverage),
+                detail=_detail_from_payload(coverage),
+                mcp_url=mcp_url,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _check(
+                name="hosted_mcp_coverage_tool",
+                ok=False,
+                detail=f"Hosted remote MCP coverage tool failed: {exc}",
+                mcp_url=mcp_url,
+            )
+        )
+
+    if not http_url:
+        return checks
+
+    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        try:
+            remote_readiness = await _call_remote_tool(
+                mcp_url,
+                "tool_get_departure_readiness",
+                {"airport_code": "GMP"},
+            )
+            http_readiness = (
+                await client.get(
+                    f"{http_url}/v1/readiness",
+                    params={"airport_code": "GMP"},
+                )
+            ).json()
+            ok, detail = _readiness_parity(remote_readiness, http_readiness)
+            if _payload_mentions_unavailable(remote_readiness):
+                ok = False
+            checks.append(
+                _check(
+                    name="hosted_mcp_readiness_parity",
+                    ok=ok,
+                    detail=detail,
+                    mcp_url=mcp_url,
+                    http_url=http_url,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            checks.append(
+                _check(
+                    name="hosted_mcp_readiness_parity",
+                    ok=False,
+                    detail=f"Hosted remote MCP readiness parity failed: {exc}",
+                    mcp_url=mcp_url,
+                    http_url=http_url,
+                )
+            )
+
+        try:
+            remote_facilities = await _call_remote_tool(
+                mcp_url,
+                "tool_find_facilities",
+                {"airport_code": "PUS", "category": "wheelchair"},
+            )
+            http_facilities = (
+                await client.get(
+                    f"{http_url}/v1/facilities",
+                    params={"airport_code": "PUS", "category": "wheelchair"},
+                )
+            ).json()
+            ok, detail = _facilities_parity(remote_facilities, http_facilities)
+            if _payload_mentions_unavailable(remote_facilities):
+                ok = False
+            if not remote_facilities["data"]["matches"]:
+                ok = False
+            checks.append(
+                _check(
+                    name="hosted_mcp_facilities_parity",
+                    ok=ok,
+                    detail=detail,
+                    mcp_url=mcp_url,
+                    http_url=http_url,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            checks.append(
+                _check(
+                    name="hosted_mcp_facilities_parity",
+                    ok=False,
+                    detail=f"Hosted remote MCP facilities parity failed: {exc}",
+                    mcp_url=mcp_url,
+                    http_url=http_url,
+                )
+            )
+
+    return checks
+
+
+def _hosted_health_check(base_url: str) -> dict[str, object]:
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True) as client:
-            health = client.get(f"{base_url}/healthz")
-            coverage = client.get(f"{base_url}/v1/coverage")
-            future_flight = client.get(
-                f"{base_url}/v1/flight-status",
-                params={"airport_code": "ICN", "travel_date": tomorrow},
-            )
-        ok = (
-            health.status_code == 200
-            and coverage.status_code == 200
-            and future_flight.status_code == 200
+            response = client.get(f"{base_url}/healthz")
+        ok = response.status_code == 200
+        detail = (
+            "Hosted /healthz responded."
+            if ok
+            else f"Hosted /healthz failed: {response.status_code}"
         )
-        detail = "Hosted HTTP canary completed."
-        if ok:
-            payload = future_flight.json()
-            detail = payload.get("meta", {}).get("coverage_note", detail)
         return _check(
-            name="hosted_http_canary",
+            name="hosted_healthz_canary",
             ok=ok,
             detail=detail,
             base_url=base_url,
-            travel_date=tomorrow,
-            health_status=health.status_code,
-            coverage_status=coverage.status_code,
-            future_flight_status=future_flight.status_code,
+            status_code=response.status_code,
         )
     except httpx.HTTPError as exc:
         return _check(
-            name="hosted_http_canary",
+            name="hosted_healthz_canary",
             ok=False,
-            detail=f"Hosted HTTP canary failed: {exc}",
+            detail=f"Hosted /healthz failed: {exc}",
             base_url=base_url,
         )
 
 
-def _hosted_mcp_canary(mcp_url: str) -> dict[str, object]:
+def _hosted_json_envelope_check(
+    *,
+    name: str,
+    base_url: str,
+    path: str,
+    params: dict[str, Any] | None = None,
+    disallow_unavailable: bool = False,
+    expected_freshness: str | None = None,
+    require_truthy_fields: list[str] | None = None,
+    require_count_field: tuple[str, int] | None = None,
+    validator: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, object]:
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            response = client.get(f"{base_url}{path}", params=params)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        return _check(
+            name=name,
+            ok=False,
+            detail=f"{path} canary failed: {exc}",
+            base_url=base_url,
+            path=path,
+            params=params or {},
+        )
+
+    ok = payload.get("ok") is True and _meta_contract_present(payload)
+    if expected_freshness and payload["meta"]["freshness"] != expected_freshness:
+        ok = False
+    if disallow_unavailable and _payload_mentions_unavailable(payload):
+        ok = False
+    for field in require_truthy_fields or []:
+        if not _dig(payload, field):
+            ok = False
+    if require_count_field is not None:
+        field, minimum = require_count_field
+        value = _dig(payload, field)
+        if not isinstance(value, list) or len(value) < minimum:
+            ok = False
+    if validator and not validator(payload):
+        ok = False
+
+    return _check(
+        name=name,
+        ok=ok,
+        detail=_detail_from_payload(payload),
+        base_url=base_url,
+        path=path,
+        params=params or {},
+        freshness=payload["meta"]["freshness"],
+        coverage_note=payload["meta"]["coverage_note"],
+    )
+
+
+def _hosted_mcp_mount_canary(mcp_url: str) -> dict[str, object]:
     headers = {"accept": "application/json, text/event-stream"}
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True) as client:
             response = client.get(mcp_url, headers=headers)
         ok = response.status_code in {400, 406}
         return _check(
-            name="hosted_mcp_canary",
+            name="hosted_mcp_mount",
             ok=ok,
             detail="Hosted remote MCP endpoint responded.",
             mcp_url=mcp_url,
@@ -345,11 +685,287 @@ def _hosted_mcp_canary(mcp_url: str) -> dict[str, object]:
         )
     except httpx.HTTPError as exc:
         return _check(
-            name="hosted_mcp_canary",
+            name="hosted_mcp_mount",
             ok=False,
-            detail=f"Hosted MCP canary failed: {exc}",
+            detail=f"Hosted MCP mount failed: {exc}",
             mcp_url=mcp_url,
         )
+
+
+def _parking_contract_check(
+    *,
+    name: str,
+    envelope,
+    require_lots: bool = False,
+) -> dict[str, object]:
+    ok = envelope.ok and bool(envelope.meta.source)
+    if _note_mentions_unavailable(envelope.meta.coverage_note):
+        ok = False
+    if require_lots and not envelope.data.lots:
+        ok = False
+    return _check(
+        name=name,
+        ok=ok,
+        detail=envelope.data.recommendation if envelope.ok else envelope.data.message,
+        airport_code=envelope.data.airport_code if envelope.ok else None,
+        coverage_note=envelope.meta.coverage_note,
+    )
+
+
+def _flight_contract_check(
+    *,
+    name: str,
+    envelope,
+    disallow_unavailable: bool = False,
+) -> dict[str, object]:
+    ok = envelope.ok and bool(envelope.meta.source)
+    if disallow_unavailable and envelope.data.status == "unavailable":
+        ok = False
+    if disallow_unavailable and _note_mentions_unavailable(envelope.meta.coverage_note):
+        ok = False
+    if disallow_unavailable and envelope.data.selected_flight is None:
+        ok = False
+    return _check(
+        name=name,
+        ok=ok,
+        detail=envelope.data.summary if envelope.ok else envelope.data.message,
+        airport_code=envelope.data.airport_code if envelope.ok else None,
+        coverage_note=envelope.meta.coverage_note,
+        freshness=envelope.meta.freshness.value,
+    )
+
+
+def _facility_contract_check(
+    *,
+    name: str,
+    envelope,
+    require_matches: bool = False,
+) -> dict[str, object]:
+    ok = envelope.ok and bool(envelope.meta.source)
+    if _note_mentions_unavailable(envelope.meta.coverage_note):
+        ok = False
+    if require_matches and not envelope.data.matches:
+        ok = False
+    return _check(
+        name=name,
+        ok=ok,
+        detail=envelope.meta.coverage_note,
+        airport_code=envelope.data.airport_code if envelope.ok else None,
+        coverage_note=envelope.meta.coverage_note,
+        matches=len(envelope.data.matches) if envelope.ok else 0,
+    )
+
+
+def _readiness_contract_check(
+    *,
+    name: str,
+    envelope,
+    require_operational_signals: bool = False,
+) -> dict[str, object]:
+    ok = envelope.ok and bool(envelope.meta.source)
+    if require_operational_signals and not envelope.data.operational_signals:
+        ok = False
+    if require_operational_signals and _note_mentions_unavailable(envelope.meta.coverage_note):
+        ok = False
+    return _check(
+        name=name,
+        ok=ok,
+        detail=envelope.data.summary if envelope.ok else envelope.data.message,
+        airport_code=envelope.data.airport_code if envelope.ok else None,
+        coverage_note=envelope.meta.coverage_note,
+        operational_signals=len(envelope.data.operational_signals) if envelope.ok else 0,
+    )
+
+
+async def _check_remote_mcp_coverage_tool_async() -> dict[str, object]:
+    with _local_public_http_url():
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url=LOCAL_BASE_URL) as client:
+                tool_names = await _list_remote_tools(f"{LOCAL_BASE_URL}/mcp/", http_client=client)
+                remote = await _call_remote_tool(
+                    f"{LOCAL_BASE_URL}/mcp/",
+                    "tool_get_coverage",
+                    {},
+                    http_client=client,
+                )
+                http_payload = (await client.get("/v1/coverage")).json()
+
+    ok = (
+        "tool_get_coverage" in tool_names
+        and remote["ok"] is True
+        and _source_signature(remote) == _source_signature(http_payload)
+        and remote["meta"]["freshness"] == http_payload["meta"]["freshness"]
+        and remote["meta"]["coverage_note"] == http_payload["meta"]["coverage_note"]
+        and bool(remote["meta"]["updated_at"])
+        and bool(http_payload["meta"]["updated_at"])
+        and remote["data"]["airports"] == http_payload["data"]["airports"]
+    )
+    return _check(
+        name="mcp_remote_coverage_tool",
+        ok=ok,
+        detail=_detail_from_payload(remote),
+        tool_count=len(tool_names),
+    )
+
+
+async def _check_remote_mcp_readiness_parity_async(settings: Settings) -> dict[str, object]:
+    _ = settings
+    with _local_public_http_url():
+        app = create_app()
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url=LOCAL_BASE_URL) as client:
+                remote = await _call_remote_tool(
+                    f"{LOCAL_BASE_URL}/mcp/",
+                    "tool_get_departure_readiness",
+                    {"airport_code": "GMP"},
+                    http_client=client,
+                )
+                response = await client.get(
+                    "/v1/readiness",
+                    params={"airport_code": "GMP"},
+                )
+                http_payload = response.json()
+
+    ok, detail = _readiness_parity(remote, http_payload)
+    return _check(
+        name="mcp_remote_readiness_parity",
+        ok=ok,
+        detail=detail,
+        airport_code=remote["data"]["airport_code"],
+    )
+
+
+async def _list_remote_tools(
+    mcp_url: str,
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> list[str]:
+    async with streamable_http_client(mcp_url, http_client=http_client) as (
+        read_stream,
+        write_stream,
+        _get_session_id,
+    ):
+        session = ClientSession(read_stream, write_stream)
+        async with session:
+            tools = await session.initialize()
+            _ = tools
+            result = await session.list_tools()
+    return [tool.name for tool in result.tools]
+
+
+async def _call_remote_tool(
+    mcp_url: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    http_client: httpx.AsyncClient | None = None,
+) -> dict[str, object]:
+    async with streamable_http_client(mcp_url, http_client=http_client) as (
+        read_stream,
+        write_stream,
+        _get_session_id,
+    ):
+        session = ClientSession(read_stream, write_stream)
+        async with session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+    return _tool_payload(result)
+
+
+def _tool_payload(result) -> dict[str, object]:
+    if result.isError:
+        raise RuntimeError(f"Remote MCP tool returned an error: {result}")
+    for item in result.content:
+        text = getattr(item, "text", None)
+        if text:
+            return json.loads(text)
+    raise ValueError("Remote MCP tool returned no text payload.")
+
+
+def _readiness_parity(remote: dict[str, Any], http_payload: dict[str, Any]) -> tuple[bool, str]:
+    ok = (
+        remote.get("ok") == http_payload.get("ok")
+        and _source_signature(remote) == _source_signature(http_payload)
+        and remote["meta"]["freshness"] == http_payload["meta"]["freshness"]
+        and remote["meta"]["coverage_note"] == http_payload["meta"]["coverage_note"]
+        and bool(remote["meta"]["updated_at"])
+        and bool(http_payload["meta"]["updated_at"])
+        and remote["data"]["airport_code"] == http_payload["data"]["airport_code"]
+        and remote["data"]["summary"] == http_payload["data"]["summary"]
+        and remote["data"]["operational_signal"] == http_payload["data"]["operational_signal"]
+        and isinstance(remote["data"]["next_actions"], list)
+        and isinstance(http_payload["data"]["next_actions"], list)
+    )
+    return ok, _detail_from_payload(remote)
+
+
+def _facilities_parity(remote: dict[str, Any], http_payload: dict[str, Any]) -> tuple[bool, str]:
+    remote_matches = remote["data"]["matches"]
+    http_matches = http_payload["data"]["matches"]
+    ok = (
+        remote.get("ok") == http_payload.get("ok")
+        and _source_signature(remote) == _source_signature(http_payload)
+        and remote["meta"]["freshness"] == http_payload["meta"]["freshness"]
+        and remote["meta"]["coverage_note"] == http_payload["meta"]["coverage_note"]
+        and bool(remote["meta"]["updated_at"])
+        and bool(http_payload["meta"]["updated_at"])
+        and remote["data"]["airport_code"] == http_payload["data"]["airport_code"]
+        and isinstance(remote_matches, list)
+        and isinstance(http_matches, list)
+        and len(remote_matches) == len(http_matches)
+    )
+    if remote_matches and http_matches:
+        ok = ok and remote_matches[0]["name"] == http_matches[0]["name"]
+        ok = ok and remote_matches[0]["category"] == http_matches[0]["category"]
+    return ok, _detail_from_payload(remote)
+
+
+def _meta_contract_present(payload: dict[str, Any]) -> bool:
+    meta = payload.get("meta", {})
+    return bool(meta.get("source")) and bool(meta.get("freshness")) and bool(meta.get("updated_at"))
+
+
+def _detail_from_payload(payload: dict[str, Any]) -> str:
+    meta = payload.get("meta", {})
+    data = payload.get("data", {})
+    return (
+        meta.get("coverage_note")
+        or data.get("summary")
+        or data.get("recommendation")
+        or "MCP payload available."
+    )
+
+
+def _payload_mentions_unavailable(payload: dict[str, Any]) -> bool:
+    return _note_mentions_unavailable(payload.get("meta", {}).get("coverage_note"))
+
+
+def _note_mentions_unavailable(note: str | None) -> bool:
+    return "unavailable" in (note or "").lower()
+
+
+def _source_signature(payload: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        (
+            item.get("name", ""),
+            item.get("kind", ""),
+            item.get("url", ""),
+        )
+        for item in payload.get("meta", {}).get("source", [])
+    ]
+
+
+def _dig(payload: dict[str, Any], path: str) -> Any:
+    current: Any = payload
+    for chunk in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(chunk)
+        else:
+            return None
+    return current
 
 
 def _report_from_checks(checks: list[dict[str, object]]) -> dict[str, object]:
@@ -375,6 +991,27 @@ def _check(
     }
     payload.update(extra)
     return payload
+
+
+@contextmanager
+def _local_public_http_url(url: str = LOCAL_BASE_URL) -> Iterator[None]:
+    previous_http = os.environ.get("DEPARTURE_READY_PUBLIC_HTTP_URL")
+    previous_mcp = os.environ.get("DEPARTURE_READY_PUBLIC_MCP_URL")
+    os.environ["DEPARTURE_READY_PUBLIC_HTTP_URL"] = url
+    os.environ.pop("DEPARTURE_READY_PUBLIC_MCP_URL", None)
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        if previous_http is None:
+            os.environ.pop("DEPARTURE_READY_PUBLIC_HTTP_URL", None)
+        else:
+            os.environ["DEPARTURE_READY_PUBLIC_HTTP_URL"] = previous_http
+        if previous_mcp is None:
+            os.environ.pop("DEPARTURE_READY_PUBLIC_MCP_URL", None)
+        else:
+            os.environ["DEPARTURE_READY_PUBLIC_MCP_URL"] = previous_mcp
+        get_settings.cache_clear()
 
 
 def _python_env() -> dict[str, str]:

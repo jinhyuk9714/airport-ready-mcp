@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from departure_ready.catalog import CATALOG_SOURCE, normalize_airport_code
 from departure_ready.connectors.base import ConnectorContext
 from departure_ready.connectors.kac_processing import KacProcessingConnector
@@ -13,6 +11,7 @@ from departure_ready.domain.models import (
     ServiceEligibility,
 )
 from departure_ready.services.baggage import build_baggage_decision
+from departure_ready.services.common import await_if_needed
 from departure_ready.services.facilities import build_facilities_envelope
 from departure_ready.services.flight import FlightPayload, build_flight_envelope
 from departure_ready.services.parking import build_parking_envelope
@@ -158,9 +157,7 @@ def _load_kac_operational_signals(
 
 
 def _await_if_needed(result):
-    if hasattr(result, "__await__"):
-        return asyncio.run(result)
-    return result
+    return await_if_needed(result)
 
 
 def _append_operational_signal_summary(

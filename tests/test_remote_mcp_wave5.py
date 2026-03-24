@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -22,8 +20,6 @@ from departure_ready.domain.models import (
     ReadinessCard,
 )
 from departure_ready.settings import get_settings
-
-ORIGINAL_ASYNCIO_RUN = asyncio.run
 
 
 @asynccontextmanager
@@ -85,25 +81,6 @@ def _fake_coverage_envelope() -> Envelope[CoveragePayload]:
         coverage_note="Repository support matrix and trust contract.",
     )
     return Envelope(meta=meta, data=payload)
-
-
-def _run_coroutine_in_thread(coro):
-    result: dict[str, object] = {}
-    errors: list[BaseException] = []
-
-    def _worker() -> None:
-        try:
-            result["value"] = ORIGINAL_ASYNCIO_RUN(coro)
-        except BaseException as exc:  # pragma: no cover - surfaced to caller
-            errors.append(exc)
-
-    thread = threading.Thread(target=_worker, daemon=True)
-    thread.start()
-    thread.join()
-
-    if errors:
-        raise errors[0]
-    return result["value"]
 
 
 def _fake_readiness_envelope(*args, **kwargs) -> Envelope[ReadinessCard]:
@@ -293,10 +270,6 @@ async def test_remote_mcp_facilities_matches_http_contract(monkeypatch):
     monkeypatch.setattr(
         "departure_ready.mcp.server.build_facilities_envelope",
         _fake_facilities_envelope,
-    )
-    monkeypatch.setattr(
-        "departure_ready.mcp.server.asyncio.run",
-        _run_coroutine_in_thread,
     )
 
     async with _remote_session(monkeypatch) as (session, app):

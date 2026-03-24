@@ -23,6 +23,7 @@ from departure_ready.contracts import (
 )
 from departure_ready.domain.models import FlightSnapshot, OperationalSignal
 from departure_ready.services.common import (
+    await_if_needed,
     envelope_from_items,
     error_envelope,
     unsupported_domain_envelope,
@@ -203,11 +204,7 @@ def _load_flight_data(
 
 
 def _ensure_list(result):
-    import asyncio
-
-    if hasattr(result, "__await__"):
-        return asyncio.run(result)
-    return result
+    return await_if_needed(result)
 
 
 def _select_flight(

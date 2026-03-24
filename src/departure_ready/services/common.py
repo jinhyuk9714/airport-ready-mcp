@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TypeVar
@@ -74,3 +76,33 @@ def unsupported_domain_envelope(airport_code: str, domain: str) -> ErrorEnvelope
         coverage_note=unsupported_coverage_note(airport_code, domain),
         hint="Use /v1/coverage to inspect official airport/domain support.",
     )
+
+
+def await_if_needed(result):
+    if hasattr(result, "__await__"):
+        return run_async_blocking(result)
+    return result
+
+
+def run_async_blocking(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, object] = {}
+    errors: list[BaseException] = []
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - surfaced to caller
+            errors.append(exc)
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if errors:
+        raise errors[0]
+    return result["value"]
