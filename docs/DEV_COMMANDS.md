@@ -5,6 +5,7 @@ cp .env.example .env
 uv sync --extra dev
 uv run pytest
 uv run ruff check .
+uv run python -m departure_ready.smoke
 uv run departure-ready-api
 uv run departure-ready-mcp
 ```

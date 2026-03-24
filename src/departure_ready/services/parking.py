@@ -9,6 +9,7 @@ from departure_ready.catalog import (
 )
 from departure_ready.connectors.base import ConnectorContext
 from departure_ready.connectors.iiac_parking import (
+    IIAC_FEE_DOC_URL,
     IIAC_PARKING_DOC_URL,
     IiacParkingConnector,
 )
@@ -73,6 +74,9 @@ def build_parking_envelope(
     filtered_lots = _filter_lots_by_terminal(lots, selected_terminal)
     if selected_terminal and filtered_lots:
         lots = filtered_lots
+
+    fee_rules = _get_fee_rules(connector) if normalized_airport == "ICN" else []
+    lots = _apply_fee_notes(normalized_airport, lots, fee_rules)
 
     payload = ParkingPayload(
         airport_code=normalized_airport,
@@ -148,6 +152,14 @@ def _get_lots(
     return _await_if_needed(connector.get_parking_status(airport_code))  # type: ignore[arg-type]
 
 
+def _get_fee_rules(connector: IiacParkingConnector | KacParkingConnector) -> list[str]:
+    getter = getattr(connector, "get_fee_rules", None)
+    if getter is None:
+        return []
+    result = _await_if_needed(getter())
+    return [str(rule) for rule in result if str(rule).strip()]
+
+
 def _await_if_needed(result):
     import asyncio
 
@@ -193,6 +205,65 @@ def _build_recommendation(
     elif requested_terminal:
         prefix = f"Best official lot for requested terminal {requested_terminal}"
     return f"{prefix}: {best.lot_name} with {best.available_spaces} spaces open."
+
+
+def _apply_fee_notes(
+    airport_code: str,
+    lots: list[ParkingLotSnapshot],
+    fee_rules: list[str],
+) -> list[ParkingLotSnapshot]:
+    if airport_code != "ICN":
+        return lots
+
+    note = _build_icn_fee_note(fee_rules)
+    if note is None:
+        return [
+            lot.model_copy(
+                update={
+                    "fee_note": (
+                        f"ICN parking fee criteria unavailable for {lot.lot_name}; "
+                        "live parking counts still shown."
+                    ),
+                    "source": [
+                        *lot.source,
+                        SourceRef(
+                            name="iiac_parking_fee",
+                            kind=SourceKind.OFFICIAL_API,
+                            url=IIAC_FEE_DOC_URL,
+                        ),
+                    ],
+                    "coverage_note": f"{lot.coverage_note}; fee criteria unavailable",
+                }
+            )
+            for lot in lots
+        ]
+
+    return [
+        lot.model_copy(
+            update={
+                "fee_note": f"ICN parking fee criteria for {lot.lot_name}: {note}",
+                "source": [
+                    *lot.source,
+                    SourceRef(
+                        name="iiac_parking_fee",
+                        kind=SourceKind.OFFICIAL_API,
+                        url=IIAC_FEE_DOC_URL,
+                    ),
+                ],
+                "coverage_note": f"{lot.coverage_note}; includes IIAC parking fee criteria",
+            }
+        )
+        for lot in lots
+    ]
+
+
+def _build_icn_fee_note(fee_rules: list[str]) -> str | None:
+    if not fee_rules:
+        return None
+    selected = [rule.strip() for rule in fee_rules if rule.strip()][:2]
+    if not selected:
+        return None
+    return "; ".join(selected)
 
 
 def _missing_inputs(

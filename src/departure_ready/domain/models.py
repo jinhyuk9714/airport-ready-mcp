@@ -158,6 +158,7 @@ class ReadinessCard(TrustStampedModel):
     airport_code: str
     summary: str
     operational_signal: str
+    operational_signals: list[OperationalSignal] = Field(default_factory=list)
     next_actions: list[str]
     flight: FlightSnapshot | None = None
     parking: ParkingPayload | None = None

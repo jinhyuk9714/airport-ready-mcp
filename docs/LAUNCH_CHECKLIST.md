@@ -1,38 +1,38 @@
 # Launch checklist
 
 ## Product
-- [ ] README matches actual implementation
-- [ ] supported airports clearly stated
-- [ ] unsupported features clearly stated
-- [ ] response examples include freshness and source
+- [x] README matches actual implementation
+- [x] supported airports clearly stated
+- [x] unsupported features clearly stated
+- [x] response examples include freshness and source
 
 ## Source operations
 - [ ] KAC keys configured
 - [ ] IIAC keys configured
-- [ ] canary requests defined for each live source
-- [ ] timeout and retry settings reviewed
-- [ ] schema drift watchlist documented
+- [x] canary requests defined for each live source
+- [x] timeout and retry settings reviewed
+- [x] schema drift watchlist documented
 
 ## API
-- [ ] `/healthz` healthy
+- [x] `/healthz` healthy
 - [ ] `/docs` renders
-- [ ] envelope contract stable
-- [ ] error responses consistent
+- [x] envelope contract stable
+- [x] error responses consistent
 
 ## MCP
-- [ ] stdio server boots
-- [ ] no stdout logging corruption
-- [ ] basic tool smoke passes
-- [ ] guide/coverage tools return current docs
+- [x] stdio server boots
+- [x] no stdout logging corruption
+- [x] basic tool smoke passes
+- [x] guide/coverage tools return current docs
 
 ## QA
-- [ ] unit tests pass
-- [ ] connector smoke passes
-- [ ] readiness happy-path corpus reviewed
-- [ ] baggage/customs edge cases reviewed
+- [x] unit tests pass
+- [x] connector smoke passes
+- [x] readiness happy-path corpus reviewed
+- [x] baggage/customs edge cases reviewed
 
 ## Safety / trust
-- [ ] no guessed live values
-- [ ] every readiness answer includes coverage note
-- [ ] customs guidance not presented as legal advice
-- [ ] baggage guidance not presented as airline guarantee
+- [x] no guessed live values
+- [x] every readiness answer includes coverage note
+- [x] customs guidance not presented as legal advice
+- [x] baggage guidance not presented as airline guarantee

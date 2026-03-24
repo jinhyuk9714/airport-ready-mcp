@@ -7,7 +7,10 @@ from mcp.server.fastmcp import FastMCP
 
 from departure_ready.services.baggage import build_baggage_envelope
 from departure_ready.services.customs import build_customs_envelope
-from departure_ready.services.facilities import build_facilities_envelope
+from departure_ready.services.facilities import (
+    build_facilities_envelope,
+    build_shops_envelope,
+)
 from departure_ready.services.flight import build_flight_envelope
 from departure_ready.services.guide import build_coverage_envelope, build_guide_envelope
 from departure_ready.services.parking import build_parking_envelope
@@ -134,6 +137,25 @@ def tool_find_facilities(
 ) -> dict:
     envelope = asyncio.run(
         build_facilities_envelope(
+            get_settings(),
+            airport_code,
+            terminal=terminal,
+            category=category,
+            query=query,
+        )
+    )
+    return envelope.model_dump(mode="json")
+
+
+@mcp.tool()
+def tool_find_shops(
+    airport_code: str,
+    terminal: str | None = None,
+    category: str | None = None,
+    query: str | None = None,
+) -> dict:
+    envelope = asyncio.run(
+        build_shops_envelope(
             get_settings(),
             airport_code,
             terminal=terminal,

@@ -42,6 +42,13 @@ Prevent confident-but-wrong travel guidance.
 - coverage tool
 - guide tool
 - readiness / parking / baggage / customs tools
+- shops tool parity with HTTP `/v1/shops`
+
+### 6. Launch smoke
+- no-key bounded-unavailable smoke runner
+- keyed canary skip behavior
+- API app boot smoke
+- MCP stdio no-stdout-pollution smoke
 
 ## Release corpus categories
 1. parking status
@@ -57,6 +64,9 @@ Automated corpus:
 - `tests/test_qa_corpus.py`
 - `tests/test_policy_services.py`
 - `tests/test_live_services.py`
+- `tests/test_readiness_wave2.py`
+- `tests/test_surface_wave2.py`
+- `tests/test_launch_wave2.py`
 
 ## Edge cases to include
 - international liquid 100ml rule

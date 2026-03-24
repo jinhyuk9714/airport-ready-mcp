@@ -12,7 +12,10 @@ Currently wired into connectors and public services:
 - `kac_parking_rt`
 - `kac_parking_congestion_rt`
 - `kac_flight_detail_rt`
+- `kac_processing_time`
+- `kac_crowd_info`
 - `iiac_parking_rt`
+- `iiac_parking_fee`
 - `iiac_flight_today`
 - `iiac_passenger_forecast`
 - `iiac_facilities`
@@ -25,11 +28,8 @@ Currently wired into connectors and public services:
 - `iiac_priority_lane`
 
 Tracked in the registry but not yet exposed in a public service or API route:
-- `iiac_parking_fee`
 - `iiac_t1_parking_slot`
 - `iiac_flight_weekly`
-- `kac_processing_time`
-- `kac_crowd_info`
 - `kac_facility_file`
 - `kac_accessibility_file`
 - `kac_parking_discount`

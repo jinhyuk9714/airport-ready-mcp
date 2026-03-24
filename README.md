@@ -36,12 +36,15 @@
   - `tool_get_self_service_options`
   - `tool_get_priority_lane_eligibility`
   - `tool_find_facilities`
+  - `tool_find_shops`
 
 ## Trust contract
 - Every public response includes `source`, `freshness`, `updated_at`, and `coverage_note`.
 - Unsupported airports/domains are explicit.
 - Forecast data is never labeled as live.
 - If a supported live source is unavailable, the API returns a bounded unavailable state instead of guessing.
+- ICN parking responses can include fee criteria notes without inventing numeric fee estimates.
+- KAC readiness can include official processing/crowd signals when coverage exists.
 
 ## Quick start
 
@@ -72,9 +75,11 @@ Without live service keys, policy endpoints still work and live domains return e
 ```bash
 uv run pytest
 uv run ruff check .
+uv run python -m departure_ready.smoke
 ```
 
 Representative release queries live in `tests/test_qa_corpus.py`.
+Wave 2 launch/smoke coverage lives in `tests/test_launch_wave2.py`.
 
 ## Build order
 Read in this order:

@@ -1,8 +1,258 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from departure_ready.api.app import create_app
 from departure_ready.services.guide import build_coverage_envelope, build_guide_envelope
+from departure_ready.services.parking import build_parking_envelope
+from departure_ready.services.readiness import build_readiness_envelope
+from departure_ready.settings import Settings
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = PROJECT_ROOT / "src"
+
+
+def build_smoke_report(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or Settings()
+    return _report_from_checks(_smoke_checks(settings))
+
+
+def build_launch_report(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or Settings()
+    checks = [
+        *_smoke_checks(settings),
+        check_api_boot(),
+        check_mcp_stdio_boot(),
+    ]
+    return _report_from_checks(checks)
+
+
+def check_api_boot() -> dict[str, object]:
+    app = create_app()
+    routes = sorted(route.path for route in app.routes)
+    ok = "/healthz" in routes and "/v1/readiness" in routes
+    return _check(
+        name="api_boot",
+        ok=ok,
+        detail="FastAPI app factory constructed successfully.",
+        routes=routes,
+    )
+
+
+def check_mcp_stdio_boot(timeout_sec: float = 0.5) -> dict[str, object]:
+    command = [
+        sys.executable,
+        "-c",
+        "from departure_ready.mcp.server import main; main()",
+    ]
+    proc = subprocess.Popen(  # noqa: S603
+        command,
+        cwd=PROJECT_ROOT,
+        env=_python_env(),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout_sec)
+        stdout, stderr = proc.communicate(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        proc.terminate()
+        try:
+            stdout, stderr = proc.communicate(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+    ok = timed_out and stdout == ""
+    return _check(
+        name="mcp_stdio_boot",
+        ok=ok,
+        detail="FastMCP stdio server launched without stdout pollution.",
+        started=True,
+        timed_out=timed_out,
+        returncode=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 def main() -> None:
-    print("coverage keys:", [a.airport_code for a in build_coverage_envelope().data.airports])
-    print("guide promises:", build_guide_envelope().data.promises)
+    report = build_launch_report()
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    raise SystemExit(0 if report["ok"] else 1)
+
+
+def _smoke_checks(settings: Settings) -> list[dict[str, object]]:
+    return [
+        _coverage_check(),
+        _guide_check(),
+        _readiness_check(
+            name="readiness_icn_no_keys",
+            airport_code="ICN",
+            going_by_car=True,
+            settings=settings,
+        ),
+        _readiness_check(
+            name="readiness_gmp_no_keys",
+            airport_code="GMP",
+            settings=settings,
+        ),
+        _parking_check(
+            name="parking_gmp_no_keys",
+            airport_code="GMP",
+            settings=settings,
+        ),
+        *_keyed_canary_checks(settings),
+    ]
+
+
+def _coverage_check() -> dict[str, object]:
+    envelope = build_coverage_envelope()
+    return _check(
+        name="coverage",
+        ok=envelope.ok,
+        detail="Coverage envelope is available.",
+        airports=[item.airport_code for item in envelope.data.airports],
+    )
+
+
+def _guide_check() -> dict[str, object]:
+    envelope = build_guide_envelope()
+    return _check(
+        name="guide",
+        ok=envelope.ok,
+        detail="Guide envelope is available.",
+        promises=envelope.data.promises,
+    )
+
+
+def _readiness_check(
+    *,
+    name: str,
+    airport_code: str,
+    settings: Settings,
+    going_by_car: bool = False,
+) -> dict[str, object]:
+    envelope = build_readiness_envelope(
+        airport_code,
+        going_by_car=going_by_car,
+        settings=settings,
+    )
+    detail = envelope.data.summary if envelope.ok else envelope.data.message
+    return _check(
+        name=name,
+        ok=envelope.ok,
+        detail=detail,
+        airport_code=envelope.data.airport_code if envelope.ok else airport_code,
+        coverage_note=envelope.meta.coverage_note,
+    )
+
+
+def _parking_check(
+    *,
+    name: str,
+    airport_code: str,
+    settings: Settings,
+) -> dict[str, object]:
+    envelope = build_parking_envelope(airport_code, settings=settings)
+    detail = envelope.data.recommendation if envelope.ok else envelope.data.message
+    return _check(
+        name=name,
+        ok=envelope.ok,
+        detail=detail,
+        airport_code=envelope.data.airport_code if envelope.ok else airport_code,
+        coverage_note=envelope.meta.coverage_note,
+    )
+
+
+def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
+    checks: list[dict[str, object]] = []
+    if settings.iiac_service_key:
+        envelope = build_parking_envelope("ICN", settings=settings)
+        checks.append(
+            _check(
+                name="iiac_canary",
+                ok=envelope.ok,
+                detail="IIAC canary executed." if envelope.ok else envelope.data.message,
+                status="ok" if envelope.ok else "fail",
+                airport_code="ICN",
+                coverage_note=envelope.meta.coverage_note,
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                name="iiac_canary",
+                ok=True,
+                status="skipped",
+                detail="DEPARTURE_READY_IIAC_SERVICE_KEY is not set.",
+            )
+        )
+
+    if settings.kac_service_key:
+        envelope = build_parking_envelope("GMP", settings=settings)
+        checks.append(
+            _check(
+                name="kac_canary",
+                ok=envelope.ok,
+                detail="KAC canary executed." if envelope.ok else envelope.data.message,
+                status="ok" if envelope.ok else "fail",
+                airport_code="GMP",
+                coverage_note=envelope.meta.coverage_note,
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                name="kac_canary",
+                ok=True,
+                status="skipped",
+                detail="DEPARTURE_READY_KAC_SERVICE_KEY is not set.",
+            )
+        )
+
+    return checks
+
+
+def _report_from_checks(checks: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "ok": all(check.get("ok", False) or check.get("status") == "skipped" for check in checks),
+        "checks": checks,
+    }
+
+
+def _check(
+    *,
+    name: str,
+    ok: bool,
+    detail: str,
+    status: str | None = None,
+    **extra: Any,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "name": name,
+        "ok": ok,
+        "status": status or ("ok" if ok else "fail"),
+        "detail": detail,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _python_env() -> dict[str, str]:
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{SRC_ROOT}{os.pathsep}{existing}" if existing else str(SRC_ROOT)
+    return env
+
+
+if __name__ == "__main__":
+    main()

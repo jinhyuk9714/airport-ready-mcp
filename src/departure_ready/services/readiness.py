@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+
 from departure_ready.catalog import CATALOG_SOURCE, normalize_airport_code
+from departure_ready.connectors.base import ConnectorContext
+from departure_ready.connectors.kac_processing import KacProcessingConnector
 from departure_ready.contracts import Envelope, Freshness, merge_response_meta
-from departure_ready.domain.models import ReadinessCard, ServiceEligibility
+from departure_ready.domain.models import OperationalSignal, ReadinessCard, ServiceEligibility
 from departure_ready.services.baggage import build_baggage_decision
 from departure_ready.services.flight import FlightPayload, build_flight_envelope
 from departure_ready.services.parking import build_parking_envelope
@@ -36,12 +40,13 @@ def build_readiness_envelope(
 
     baggage_warnings = [build_baggage_decision(item, "international") for item in (items or [])]
     service_eligibility = _build_service_eligibility(normalized_airport, traveler_flags or [])
+    operational_signals, signal_notes = _load_kac_operational_signals(normalized_airport, settings)
 
     flight = None
     operational_signal = "unavailable"
     summary = f"{normalized_airport} readiness is bounded by current official-source coverage."
     next_actions = ["Review flight status before leaving for the airport."]
-    trust_items = [*baggage_warnings, *service_eligibility]
+    trust_items = [*baggage_warnings, *service_eligibility, *operational_signals]
 
     if flight_envelope.ok:
         flight_payload: FlightPayload = flight_envelope.data
@@ -58,6 +63,12 @@ def build_readiness_envelope(
             next_actions.append(
                 "Official flight status is unavailable, so verify with the airport or airline."
             )
+
+    if operational_signals:
+        summary = _append_operational_signal_summary(summary, operational_signals)
+        next_actions.extend(_operational_signal_actions(operational_signals))
+    if signal_notes:
+        next_actions.extend(signal_notes)
 
     parking = None
     if parking_envelope is not None and parking_envelope.ok:
@@ -82,10 +93,13 @@ def build_readiness_envelope(
         default_source=[CATALOG_SOURCE],
         default_freshness=Freshness.STATIC,
     )
+    if signal_notes:
+        meta.coverage_note = f"{meta.coverage_note} | {' | '.join(signal_notes)}"
     card = ReadinessCard(
         airport_code=normalized_airport,
         summary=summary,
         operational_signal=operational_signal,
+        operational_signals=operational_signals,
         next_actions=list(dict.fromkeys(next_actions)),
         flight=flight,
         parking=parking,
@@ -98,6 +112,69 @@ def build_readiness_envelope(
         coverage_note=meta.coverage_note,
     )
     return Envelope(meta=meta, data=card)
+
+
+def _load_kac_operational_signals(
+    airport_code: str,
+    settings: Settings,
+) -> tuple[list[OperationalSignal], list[str]]:
+    normalized_airport = normalize_airport_code(airport_code) or airport_code.upper()
+    if normalized_airport not in {"GMP", "CJU", "PUS", "CJJ", "TAE"}:
+        return [], []
+
+    context = ConnectorContext(
+        timeout_sec=settings.http_timeout_sec,
+        default_headers={"User-Agent": "departure-ready-mcp/0.1.0"},
+        max_retries=settings.http_max_retries,
+    )
+    connector = KacProcessingConnector(context, settings.kac_service_key)
+    note_label = "processing signal" if normalized_airport in {"GMP", "CJU"} else "crowd signal"
+
+    try:
+        if normalized_airport in {"GMP", "CJU"}:
+            signal = _await_if_needed(connector.get_processing_signal(normalized_airport))
+        else:
+            signal = _await_if_needed(connector.get_crowd_signal(normalized_airport))
+    except Exception:  # noqa: BLE001
+        return [], [f"Official KAC {note_label} unavailable for {normalized_airport}."]
+
+    if signal is None:
+        return [], [f"Official KAC {note_label} unavailable for {normalized_airport}."]
+
+    return [signal], []
+
+
+def _await_if_needed(result):
+    if hasattr(result, "__await__"):
+        return asyncio.run(result)
+    return result
+
+
+def _append_operational_signal_summary(
+    summary: str,
+    signals: list[OperationalSignal],
+) -> str:
+    signal_bits = [
+        f"{signal.airport_code} {signal.signal_type.replace('_', ' ')}: {signal.headline}"
+        for signal in signals
+    ]
+    return f"{summary} Operational signals: {'; '.join(signal_bits)}."
+
+
+def _operational_signal_actions(signals: list[OperationalSignal]) -> list[str]:
+    actions: list[str] = []
+    for signal in signals:
+        if signal.signal_type == "processing_time":
+            actions.append(
+                f"Use the official processing time signal for {signal.airport_code}: "
+                f"{signal.headline}."
+            )
+        elif signal.signal_type == "crowd_info":
+            actions.append(
+                f"Use the official crowd signal for {signal.airport_code}: "
+                f"{signal.headline}."
+            )
+    return actions
 
 
 def _build_service_eligibility(

@@ -82,7 +82,37 @@ class IiacParkingConnector(OfficialConnector):
         return snapshots
 
     def parse_fee_payload(self, payload: dict) -> list[str]:
-        return [str(row.get("chardesc")) for row in extract_items(payload) if row.get("chardesc")]
+        rules: list[str] = []
+        for row in extract_items(payload):
+            title = (
+                row.get("chardesc")
+                or row.get("charnm")
+                or row.get("charge")
+                or row.get("detail")
+            )
+            if not title:
+                continue
+
+            parts: list[str] = [str(title)]
+            extra = _join_present(
+                [
+                    row.get("weekday"),
+                    row.get("weekend"),
+                    row.get("time"),
+                    row.get("note"),
+                ]
+            )
+            if extra:
+                parts.append(extra)
+            rules.append(" - ".join(parts))
+        return rules
+
+
+def _join_present(values: list[str | None]) -> str | None:
+    present = [str(value) for value in values if value]
+    if not present:
+        return None
+    return ", ".join(present)
 
 
 def infer_iiac_terminal(value: str | None) -> str | None:

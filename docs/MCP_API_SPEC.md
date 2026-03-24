@@ -45,6 +45,7 @@ Query:
 
 Returns:
 - lot states
+- `fee_note` enrichment for ICN lots when official fee criteria are available
 - congestion summary
 - explicit unavailable state when live parking data cannot be fetched
 
@@ -148,6 +149,7 @@ Query:
 
 Returns:
 - readiness card
+- `operational_signals` when official KAC processing/crowd coverage exists
 - next actions
 - parking recommendation
 - service eligibility
@@ -167,6 +169,7 @@ Returns:
 - `tool_get_self_service_options`
 - `tool_get_priority_lane_eligibility`
 - `tool_find_facilities`
+- `tool_find_shops`
 
 ## MCP tool output rule
 Tool outputs should stay structured and short.
