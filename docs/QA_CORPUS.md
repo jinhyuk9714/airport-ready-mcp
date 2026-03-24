@@ -32,4 +32,11 @@ Expected:
 - with no live key or live outage, return `ok=true` with empty lots and explicit unavailable note
 - never fabricate parking counts
 
+6. "인천 T1 단기주차장 자리랑 김포공항 주차 정책도 같이 알려줘"
+Expected:
+- `/v1/parking?airport_code=ICN`
+- T1 short-term slot coverage is merged when official slot data exists
+- KAC airports surface short policy notes separately from live counts
+- no numeric fee or discount estimate is fabricated
+
 The automated version of this corpus lives in `tests/test_qa_corpus.py`.

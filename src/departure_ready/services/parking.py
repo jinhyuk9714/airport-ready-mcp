@@ -17,6 +17,10 @@ from departure_ready.connectors.kac_parking import (
     KAC_PARKING_DOC_URL,
     KacParkingConnector,
 )
+from departure_ready.connectors.policy import (
+    KAC_PARKING_DISCOUNT,
+    KAC_PARKING_RESERVATION,
+)
 from departure_ready.contracts import Envelope, ErrorEnvelope, Freshness, SourceKind, SourceRef
 from departure_ready.domain.models import ParkingLotSnapshot, ParkingPayload
 from departure_ready.services.common import (
@@ -75,6 +79,9 @@ def build_parking_envelope(
     if selected_terminal and filtered_lots:
         lots = filtered_lots
 
+    if normalized_airport == "ICN":
+        lots = _apply_icn_slot_signals(connector, lots)
+
     fee_rules = _get_fee_rules(connector) if normalized_airport == "ICN" else []
     lots = _apply_fee_notes(normalized_airport, lots, fee_rules)
 
@@ -84,6 +91,7 @@ def build_parking_envelope(
         recommendation=_build_recommendation(normalized_airport, lots, selected_terminal, terminal),
         lots=lots,
         missing_inputs=_missing_inputs(selected_terminal, terminal, lots),
+        policy_notes=_parking_policy_notes(normalized_airport),
     )
 
     if lots:
@@ -158,6 +166,16 @@ def _get_fee_rules(connector: IiacParkingConnector | KacParkingConnector) -> lis
         return []
     result = _await_if_needed(getter())
     return [str(rule) for rule in result if str(rule).strip()]
+
+
+def _get_t1_slot_lots(
+    connector: IiacParkingConnector | KacParkingConnector,
+) -> list[ParkingLotSnapshot] | None:
+    getter = getattr(connector, "get_t1_parking_slot_status", None)
+    if getter is None:
+        return None
+    result = _await_if_needed(getter())
+    return list(result)
 
 
 def _await_if_needed(result):
@@ -254,6 +272,140 @@ def _apply_fee_notes(
             }
         )
         for lot in lots
+    ]
+
+
+def _apply_icn_slot_signals(
+    connector: IiacParkingConnector | KacParkingConnector,
+    lots: list[ParkingLotSnapshot],
+) -> list[ParkingLotSnapshot]:
+    try:
+        slot_lots = _get_t1_slot_lots(connector)
+    except Exception as exc:  # noqa: BLE001
+        return _annotate_icn_t1_slot_unavailable(
+            lots,
+            f"IIAC T1 parking slot source unavailable: {exc}",
+        )
+
+    if not slot_lots:
+        return _annotate_icn_t1_slot_unavailable(
+            lots,
+            "IIAC T1 parking slot source unavailable",
+        )
+
+    merged = _merge_icn_t1_slot_lots(lots, slot_lots)
+    if merged == lots:
+        return _annotate_icn_t1_slot_unavailable(
+            lots,
+            "IIAC T1 parking slot source returned no matching T1 rows",
+        )
+    return merged
+
+
+def _merge_icn_t1_slot_lots(
+    lots: list[ParkingLotSnapshot],
+    slot_lots: list[ParkingLotSnapshot],
+) -> list[ParkingLotSnapshot]:
+    merged: list[ParkingLotSnapshot] = []
+    slot_candidates = [slot for slot in slot_lots if _is_icn_t1_short_term_lot(slot)]
+
+    for lot in lots:
+        if not _is_icn_t1_short_term_lot(lot):
+            merged.append(lot)
+            continue
+
+        slot = _match_slot_lot(lot, slot_candidates)
+        if slot is None:
+            merged.append(
+                lot.model_copy(
+                    update={
+                        "coverage_note": (
+                            f"{lot.coverage_note}; IIAC T1 parking slot source unavailable"
+                        ),
+                    }
+                )
+            )
+            continue
+
+        merged.append(
+            lot.model_copy(
+                update={
+                    "available_spaces": slot.available_spaces
+                    if slot.available_spaces is not None
+                    else lot.available_spaces,
+                    "occupancy_pct": slot.occupancy_pct
+                    if slot.occupancy_pct is not None
+                    else lot.occupancy_pct,
+                    "status": slot.status,
+                    "source": _merge_sources(lot.source, slot.source),
+                    "coverage_note": f"{lot.coverage_note}; includes IIAC T1 parking slot status",
+                }
+            )
+        )
+
+    return merged
+
+
+def _annotate_icn_t1_slot_unavailable(
+    lots: list[ParkingLotSnapshot],
+    note: str,
+) -> list[ParkingLotSnapshot]:
+    return [
+        lot.model_copy(
+            update={
+                "coverage_note": f"{lot.coverage_note}; {note}"
+                if _is_icn_t1_short_term_lot(lot)
+                else lot.coverage_note,
+            }
+        )
+        for lot in lots
+    ]
+
+
+def _match_slot_lot(
+    lot: ParkingLotSnapshot,
+    slot_candidates: list[ParkingLotSnapshot],
+) -> ParkingLotSnapshot | None:
+    if not slot_candidates:
+        return None
+    lot_terminal = normalize_terminal_code(lot.airport_code, lot.terminal)
+    for slot in slot_candidates:
+        if normalize_terminal_code(slot.airport_code, slot.terminal) == lot_terminal:
+            return slot
+        if slot.lot_name == lot.lot_name:
+            return slot
+    return slot_candidates[0]
+
+
+def _merge_sources(
+    existing: list[SourceRef],
+    extra: list[SourceRef],
+) -> list[SourceRef]:
+    merged: list[SourceRef] = []
+    seen: set[tuple[str, SourceKind, str]] = set()
+    for source in [*existing, *extra]:
+        key = (source.name, source.kind, source.url)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(source)
+    return merged
+
+
+def _is_icn_t1_short_term_lot(lot: ParkingLotSnapshot) -> bool:
+    terminal = normalize_terminal_code(lot.airport_code, lot.terminal)
+    if terminal == "T1":
+        return True
+    lot_name = lot.lot_name.upper()
+    return "T1" in lot_name or "제1" in lot.lot_name
+
+
+def _parking_policy_notes(airport_code: str) -> list[str]:
+    if airport_code == "ICN":
+        return []
+    return [
+        f"{KAC_PARKING_DISCOUNT.name}: official parking discount guidance",
+        f"{KAC_PARKING_RESERVATION.name}: official parking reservation guidance",
     ]
 
 

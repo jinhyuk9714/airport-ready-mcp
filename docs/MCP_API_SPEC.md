@@ -46,6 +46,8 @@ Query:
 Returns:
 - lot states
 - `fee_note` enrichment for ICN lots when official fee criteria are available
+- `policy_notes` for KAC airports from official parking discount/reservation guidance
+- ICN T1 short-term slot signal merged into the live overview when available
 - congestion summary
 - explicit unavailable state when live parking data cannot be fetched
 

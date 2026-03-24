@@ -54,6 +54,7 @@ class ParkingPayload(BaseModel):
     recommendation: str
     lots: list[ParkingLotSnapshot] = Field(default_factory=list)
     missing_inputs: list[str] = Field(default_factory=list)
+    policy_notes: list[str] = Field(default_factory=list)
 
 
 class FlightSnapshot(TrustStampedModel):
