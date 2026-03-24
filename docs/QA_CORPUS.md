@@ -39,4 +39,11 @@ Expected:
 - KAC airports surface short policy notes separately from live counts
 - no numeric fee or discount estimate is fabricated
 
+7. "내일 인천 출국 KE123 편 일정 먼저 볼 수 있어?"
+Expected:
+- `/v1/flight-status?airport_code=ICN&flight_no=KE123&travel_date=2026-03-25`
+- future ICN flight support uses the official weekly source
+- response uses `freshness=daily`
+- gate/check-in are not invented when the weekly source does not provide them
+
 The automated version of this corpus lives in `tests/test_qa_corpus.py`.

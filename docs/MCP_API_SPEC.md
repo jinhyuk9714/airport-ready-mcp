@@ -55,6 +55,7 @@ Returns:
 Query:
 - `airport_code`
 - `flight_no` optional
+- `travel_date` optional (`YYYY-MM-DD`)
 
 Returns:
 - scheduled / changed time
@@ -62,6 +63,9 @@ Returns:
 - gate
 - counters
 - status
+- future `travel_date` is officially supported only for `ICN`
+- future ICN results use `freshness=daily` and do not invent live-only gate/check-in fields
+- future non-ICN requests return explicit unsupported coverage
 
 ### `GET /v1/baggage-check`
 Query:
@@ -158,6 +162,10 @@ Returns:
 - baggage warnings
 - terminal/service lookup hints
 
+Notes:
+- this wave keeps readiness current-day only
+- future schedule support lives in `GET /v1/flight-status`, not in readiness
+
 ---
 
 ## MCP tools
@@ -172,6 +180,17 @@ Returns:
 - `tool_get_priority_lane_eligibility`
 - `tool_find_facilities`
 - `tool_find_shops`
+
+Remote transport:
+- stdio entrypoint: `departure-ready-mcp`
+- streamable-http mount: `/mcp`
+
+`tool_get_flight_status` input:
+- `airport_code`
+- `flight_no` optional
+- `travel_date` optional (`YYYY-MM-DD`)
+
+Future-dated official flight support is limited to `ICN` in the current wave.
 
 ## MCP tool output rule
 Tool outputs should stay structured and short.

@@ -17,3 +17,4 @@ jobs:
       - run: uv run ruff check .
       - run: uv run pytest
       - run: uv run python -m departure_ready.smoke
+      - run: uv run python -m departure_ready.smoke --mode hosted

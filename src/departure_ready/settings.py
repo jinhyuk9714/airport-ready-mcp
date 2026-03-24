@@ -36,6 +36,20 @@ class Settings(BaseSettings):
     def supported_airport_list(self) -> list[str]:
         return [x.strip().upper() for x in self.supported_airports.split(",") if x.strip()]
 
+    @property
+    def resolved_public_http_url(self) -> str | None:
+        if not self.public_http_url:
+            return None
+        return self.public_http_url.rstrip("/")
+
+    @property
+    def resolved_public_mcp_url(self) -> str | None:
+        if self.public_mcp_url:
+            return self.public_mcp_url.rstrip("/")
+        if self.resolved_public_http_url:
+            return f"{self.resolved_public_http_url}/mcp"
+        return None
+
 
 @lru_cache
 def get_settings() -> Settings:

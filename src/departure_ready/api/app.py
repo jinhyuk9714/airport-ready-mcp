@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 from fastapi import FastAPI, Query
 from fastapi.concurrency import run_in_threadpool
 
+from departure_ready.mcp.server import create_streamable_http_app
 from departure_ready.services.baggage import build_baggage_envelope
 from departure_ready.services.customs import build_customs_envelope
 from departure_ready.services.facilities import (
@@ -26,11 +28,20 @@ ListQuery = Annotated[list[str] | None, Query()]
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    remote_mcp_app = create_streamable_http_app(settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        async with remote_mcp_app.router.lifespan_context(remote_mcp_app):
+            yield
+
     app = FastAPI(
         title="Departure Ready MCP",
         version="0.1.0",
         summary="Official-source-first airport departure readiness HTTP API",
+        lifespan=lifespan,
     )
+    app.mount("/mcp", remote_mcp_app)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
@@ -61,11 +72,13 @@ def create_app() -> FastAPI:
     async def get_flight_status(
         airport_code: str,
         flight_no: str | None = None,
+        travel_date: str | None = None,
     ) -> dict[str, object]:
         envelope = await run_in_threadpool(
             build_flight_envelope,
             airport_code,
             flight_no,
+            travel_date=travel_date,
             settings=settings,
         )
         return envelope.model_dump(mode="json")

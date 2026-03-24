@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+import httpx
+from fastapi.testclient import TestClient
 
 from departure_ready.api.app import create_app
 from departure_ready.services.guide import build_coverage_envelope, build_guide_envelope
@@ -28,14 +33,48 @@ def build_launch_report(settings: Settings | None = None) -> dict[str, object]:
         *_smoke_checks(settings),
         check_api_boot(),
         check_mcp_stdio_boot(),
+        check_remote_mcp_mount(),
     ]
+    return _report_from_checks(checks)
+
+
+def build_hosted_canary_report(settings: Settings | None = None) -> dict[str, object]:
+    settings = settings or Settings()
+    http_url = settings.resolved_public_http_url
+    mcp_url = settings.resolved_public_mcp_url
+    checks: list[dict[str, object]] = []
+    if not http_url:
+        checks.append(
+            _check(
+                name="hosted_http_canary",
+                ok=True,
+                status="skipped",
+                detail="DEPARTURE_READY_PUBLIC_HTTP_URL is not set.",
+            )
+        )
+    else:
+        checks.append(_hosted_http_canary(http_url))
+    if not mcp_url:
+        checks.append(
+            _check(
+                name="hosted_mcp_canary",
+                ok=True,
+                status="skipped",
+                detail=(
+                    "DEPARTURE_READY_PUBLIC_MCP_URL is not set and no public HTTP "
+                    "URL fallback is available."
+                ),
+            )
+        )
+    else:
+        checks.append(_hosted_mcp_canary(mcp_url))
     return _report_from_checks(checks)
 
 
 def check_api_boot() -> dict[str, object]:
     app = create_app()
     routes = sorted(route.path for route in app.routes)
-    ok = "/healthz" in routes and "/v1/readiness" in routes
+    ok = "/healthz" in routes and "/v1/readiness" in routes and "/mcp" in routes
     return _check(
         name="api_boot",
         ok=ok,
@@ -84,9 +123,40 @@ def check_mcp_stdio_boot(timeout_sec: float = 0.5) -> dict[str, object]:
     )
 
 
+def check_remote_mcp_mount() -> dict[str, object]:
+    with TestClient(create_app(), base_url="http://127.0.0.1:8000") as client:
+        response = client.get(
+            "/mcp/",
+            headers={"accept": "application/json, text/event-stream"},
+        )
+    ok = response.status_code in {400, 406}
+    return _check(
+        name="mcp_remote_mount",
+        ok=ok,
+        detail="Remote MCP mount responded on /mcp.",
+        status_code=response.status_code,
+    )
+
+
 def main() -> None:
-    report = build_launch_report()
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["smoke", "launch", "hosted"], default="launch")
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+
+    settings = Settings()
+    if args.mode == "smoke":
+        report = build_smoke_report(settings)
+    elif args.mode == "hosted":
+        report = build_hosted_canary_report(settings)
+    else:
+        report = build_launch_report(settings)
+
+    rendered = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(f"{rendered}\n")
+    print(rendered)
     raise SystemExit(0 if report["ok"] else 1)
 
 
@@ -220,6 +290,66 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
         )
 
     return checks
+
+
+def _hosted_http_canary(base_url: str) -> dict[str, object]:
+    tomorrow = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            health = client.get(f"{base_url}/healthz")
+            coverage = client.get(f"{base_url}/v1/coverage")
+            future_flight = client.get(
+                f"{base_url}/v1/flight-status",
+                params={"airport_code": "ICN", "travel_date": tomorrow},
+            )
+        ok = (
+            health.status_code == 200
+            and coverage.status_code == 200
+            and future_flight.status_code == 200
+        )
+        detail = "Hosted HTTP canary completed."
+        if ok:
+            payload = future_flight.json()
+            detail = payload.get("meta", {}).get("coverage_note", detail)
+        return _check(
+            name="hosted_http_canary",
+            ok=ok,
+            detail=detail,
+            base_url=base_url,
+            travel_date=tomorrow,
+            health_status=health.status_code,
+            coverage_status=coverage.status_code,
+            future_flight_status=future_flight.status_code,
+        )
+    except httpx.HTTPError as exc:
+        return _check(
+            name="hosted_http_canary",
+            ok=False,
+            detail=f"Hosted HTTP canary failed: {exc}",
+            base_url=base_url,
+        )
+
+
+def _hosted_mcp_canary(mcp_url: str) -> dict[str, object]:
+    headers = {"accept": "application/json, text/event-stream"}
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            response = client.get(mcp_url, headers=headers)
+        ok = response.status_code in {400, 406}
+        return _check(
+            name="hosted_mcp_canary",
+            ok=ok,
+            detail="Hosted remote MCP endpoint responded.",
+            mcp_url=mcp_url,
+            status_code=response.status_code,
+        )
+    except httpx.HTTPError as exc:
+        return _check(
+            name="hosted_mcp_canary",
+            ok=False,
+            detail=f"Hosted MCP canary failed: {exc}",
+            mcp_url=mcp_url,
+        )
 
 
 def _report_from_checks(checks: list[dict[str, object]]) -> dict[str, object]:

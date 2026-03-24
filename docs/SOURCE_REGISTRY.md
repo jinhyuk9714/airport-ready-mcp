@@ -20,6 +20,7 @@ Currently wired into connectors and public services:
 - `iiac_parking_fee`
 - `iiac_t1_parking_slot`
 - `iiac_flight_today`
+- `iiac_flight_weekly`
 - `iiac_passenger_forecast`
 - `iiac_facilities`
 - `iiac_shops`
@@ -31,7 +32,6 @@ Currently wired into connectors and public services:
 - `iiac_priority_lane`
 
 Tracked in the registry but not yet exposed in a public service or API route:
-- `iiac_flight_weekly`
 - `kac_facility_file`
 - `kac_accessibility_file`
 
@@ -142,6 +142,7 @@ Use first for operational answers.
 - freshness label: `live` / `near-term`
 - notes:
   - use same-day first, weekly as future fallback
+  - weekly exposure is limited to `flight-status`; readiness remains same-day only
 
 ### 10) IIAC passenger forecast by zone
 - portal id / doc: `15095066`

@@ -26,6 +26,7 @@ Prevent confident-but-wrong travel guidance.
 
 ### 4. API smoke
 - `/healthz`
+- `/docs`
 - `/v1/coverage`
 - `/v1/guide`
 - `/v1/parking`
@@ -39,6 +40,7 @@ Prevent confident-but-wrong travel guidance.
 
 ### 5. MCP smoke
 - stdio boot
+- remote `/mcp` mount
 - coverage tool
 - guide tool
 - readiness / parking / baggage / customs tools
@@ -47,6 +49,7 @@ Prevent confident-but-wrong travel guidance.
 ### 6. Launch smoke
 - no-key bounded-unavailable smoke runner
 - keyed canary skip behavior
+- hosted canary dry-run without public URLs
 - API app boot smoke
 - MCP stdio no-stdout-pollution smoke
 
@@ -67,6 +70,10 @@ Automated corpus:
 - `tests/test_readiness_wave2.py`
 - `tests/test_surface_wave2.py`
 - `tests/test_launch_wave2.py`
+- `tests/test_future_flight_wave3.py`
+- `tests/test_future_flight_surface_wave3.py`
+- `tests/test_parking_wave3.py`
+- `tests/test_remote_launch_wave3.py`
 
 ## Edge cases to include
 - international liquid 100ml rule
@@ -74,6 +81,8 @@ Automated corpus:
 - kimchi / gochujang
 - battery ambiguity
 - ICN-only SmartPass queried for GMP
+- future ICN weekly flight without gate/check-in fields
+- future non-ICN flight query returns explicit unsupported coverage
 - live source unavailable but static policy still available
 
 ## Release gate

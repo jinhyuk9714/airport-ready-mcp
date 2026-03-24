@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
 
 from departure_ready.services.baggage import build_baggage_envelope
 from departure_ready.services.customs import build_customs_envelope
@@ -67,10 +69,15 @@ def tool_get_parking_status(airport_code: str, terminal: str | None = None) -> d
 
 
 @mcp.tool()
-def tool_get_flight_status(airport_code: str, flight_no: str | None = None) -> dict:
+def tool_get_flight_status(
+    airport_code: str,
+    flight_no: str | None = None,
+    travel_date: str | None = None,
+) -> dict:
     envelope = build_flight_envelope(
         airport_code,
         flight_no,
+        travel_date=travel_date,
         settings=get_settings(),
     )
     return envelope.model_dump(mode="json")
@@ -169,3 +176,66 @@ def tool_find_shops(
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     mcp.run(transport="stdio")
+
+
+def create_streamable_http_app(settings=None) -> Starlette:
+    runtime_settings = settings or get_settings()
+    mcp.settings.streamable_http_path = "/"
+    mcp.settings.transport_security = mcp.settings.transport_security.model_copy(
+        update={
+            "allowed_hosts": _build_allowed_hosts(runtime_settings),
+            "allowed_origins": _build_allowed_origins(runtime_settings),
+        }
+    )
+    mcp._session_manager = None
+    return mcp.streamable_http_app()
+
+
+def _build_allowed_hosts(settings) -> list[str]:
+    hosts = list(mcp.settings.transport_security.allowed_hosts)
+    for value in (settings.resolved_public_http_url, settings.resolved_public_mcp_url):
+        hosts.extend(_host_candidates(value))
+    return _dedupe(hosts)
+
+
+def _build_allowed_origins(settings) -> list[str]:
+    origins = list(mcp.settings.transport_security.allowed_origins)
+    for value in (settings.resolved_public_http_url, settings.resolved_public_mcp_url):
+        origins.extend(_origin_candidates(value))
+    return _dedupe(origins)
+
+
+def _host_candidates(url: str | None) -> list[str]:
+    if not url:
+        return []
+    parsed = urlparse(url)
+    if not parsed.hostname:
+        return []
+    candidates = [parsed.hostname]
+    if parsed.port is not None:
+        candidates.append(f"{parsed.hostname}:{parsed.port}")
+    else:
+        candidates.append(f"{parsed.hostname}:*")
+    return candidates
+
+
+def _origin_candidates(url: str | None) -> list[str]:
+    if not url:
+        return []
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.hostname:
+        return []
+    if parsed.port is not None:
+        return [f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"]
+    return [f"{parsed.scheme}://{parsed.hostname}"]
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped

@@ -10,12 +10,14 @@
 - [ ] KAC keys configured
 - [ ] IIAC keys configured
 - [x] canary requests defined for each live source
+- [x] hosted canary workflow committed
 - [x] timeout and retry settings reviewed
 - [x] schema drift watchlist documented
 
 ## API
 - [x] `/healthz` healthy
-- [ ] `/docs` renders
+- [x] `/docs` renders
+- [x] remote MCP mount responds on `/mcp`
 - [x] envelope contract stable
 - [x] error responses consistent
 
@@ -24,12 +26,19 @@
 - [x] no stdout logging corruption
 - [x] basic tool smoke passes
 - [x] guide/coverage tools return current docs
+- [x] streamable-http mount shares the same trust contract
 
 ## QA
 - [x] unit tests pass
 - [x] connector smoke passes
 - [x] readiness happy-path corpus reviewed
 - [x] baggage/customs edge cases reviewed
+- [x] hosted canary dry-run stays bounded without public URLs
+
+## Deployment
+- [x] Render blueprint committed
+- [x] public MCP URL falls back to `public_http_url + "/mcp"`
+- [x] CI validates smoke + hosted canary dry-run
 
 ## Safety / trust
 - [x] no guessed live values

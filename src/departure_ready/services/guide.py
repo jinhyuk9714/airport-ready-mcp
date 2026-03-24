@@ -31,11 +31,13 @@ def build_guide_envelope() -> Envelope[GuidePayload]:
             "operational data when available",
             "keep parking, baggage, customs, and service eligibility separate",
             "label live vs forecast vs policy data explicitly",
+            "support future-dated ICN flight lookups only through flight-status surfaces",
         ],
         out_of_scope=[
             "generic map routing",
             "travel visa advice",
             "non-official airport crowd guesses",
+            "future-dated readiness cards outside same-day operational coverage",
         ],
     )
     return Envelope(

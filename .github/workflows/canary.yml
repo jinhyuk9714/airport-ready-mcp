@@ -1,0 +1,29 @@
+name: canary
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * *"
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    env:
+      DEPARTURE_READY_KAC_SERVICE_KEY: ${{ secrets.DEPARTURE_READY_KAC_SERVICE_KEY }}
+      DEPARTURE_READY_IIAC_SERVICE_KEY: ${{ secrets.DEPARTURE_READY_IIAC_SERVICE_KEY }}
+      DEPARTURE_READY_PUBLIC_HTTP_URL: ${{ secrets.DEPARTURE_READY_PUBLIC_HTTP_URL }}
+      DEPARTURE_READY_PUBLIC_MCP_URL: ${{ secrets.DEPARTURE_READY_PUBLIC_MCP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: uv sync --extra dev
+      - run: uv run python -m departure_ready.smoke --mode smoke --output artifacts/local-smoke.json
+      - run: uv run python -m departure_ready.smoke --mode hosted --output artifacts/hosted-canary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-reports
+          path: artifacts/

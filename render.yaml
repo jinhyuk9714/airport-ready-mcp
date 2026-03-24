@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: departure-ready-mcp
+    runtime: python
+    plan: starter
+    autoDeployTrigger: commit
+    buildCommand: uv sync
+    startCommand: uv run departure-ready-api
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: DEPARTURE_READY_ENV
+        value: prod
+      - key: DEPARTURE_READY_PUBLIC_HTTP_URL
+        sync: false
+      - key: DEPARTURE_READY_PUBLIC_MCP_URL
+        sync: false
+      - key: DEPARTURE_READY_KAC_SERVICE_KEY
+        sync: false
+      - key: DEPARTURE_READY_IIAC_SERVICE_KEY
+        sync: false
