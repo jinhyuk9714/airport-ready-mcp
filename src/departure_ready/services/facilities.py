@@ -7,6 +7,13 @@ from departure_ready.connectors.iiac_facilities import (
     IIAC_SHOPS_DOC_URL,
     IiacFacilityConnector,
 )
+from departure_ready.connectors.kac_facilities import (
+    KAC_ACCESSIBILITY_DOC_URL,
+    KAC_FACILITY_DOC_URL,
+)
+from departure_ready.connectors.kac_facilities import (
+    KacFacilitiesConnector as KacFacilityConnector,
+)
 from departure_ready.contracts import Envelope, Freshness, SourceKind, SourceRef
 from departure_ready.domain.models import FacilityPayload
 from departure_ready.services.common import envelope_from_items, unsupported_domain_envelope
@@ -29,20 +36,31 @@ async def build_facilities_envelope(
     if not is_domain_supported(normalized_airport, "facilities"):
         return unsupported_domain_envelope(normalized_airport, "facilities")
 
-    connector = IiacFacilityConnector(
-        ConnectorContext(
-            timeout_sec=settings.http_timeout_sec,
-            default_headers={},
-            max_retries=settings.http_max_retries,
-        ),
-        settings.iiac_service_key,
-    )
-
     try:
         if normalized_airport == "ICN":
+            connector = IiacFacilityConnector(
+                ConnectorContext(
+                    timeout_sec=settings.http_timeout_sec,
+                    default_headers={},
+                    max_retries=settings.http_max_retries,
+                ),
+                settings.iiac_service_key,
+            )
             matches = await connector.find_facilities(query=query, category=category)
         else:
-            matches = []
+            connector = KacFacilityConnector(
+                ConnectorContext(
+                    timeout_sec=settings.http_timeout_sec,
+                    default_headers={},
+                    max_retries=settings.http_max_retries,
+                ),
+                settings.kac_service_key,
+            )
+            matches = await connector.find_facilities(
+                normalized_airport,
+                query=query,
+                category=category,
+            )
     except ConnectorUnavailableError:
         matches = []
 
@@ -54,7 +72,7 @@ async def build_facilities_envelope(
             payload,
             payload.matches,
             default_note=f"{normalized_airport} facility lookup",
-            default_freshness=Freshness.DAILY,
+            default_freshness=Freshness.DAILY if normalized_airport == "ICN" else Freshness.STATIC,
         )
 
     # Bounded unavailable state: airport supports the domain, but live/daily data is absent.
@@ -70,14 +88,29 @@ async def build_facilities_envelope(
             f"{normalized_airport} facility data is currently unavailable or empty. "
             "No unofficial fallback was used."
         ),
-        default_source=[
-            SourceRef(
-                name="iiac_facilities",
-                kind=SourceKind.OFFICIAL_API,
-                url=IIAC_FACILITIES_DOC_URL,
-            )
-        ],
-        default_freshness=Freshness.DAILY,
+        default_source=(
+            [
+                SourceRef(
+                    name="iiac_facilities",
+                    kind=SourceKind.OFFICIAL_API,
+                    url=IIAC_FACILITIES_DOC_URL,
+                )
+            ]
+            if normalized_airport == "ICN"
+            else [
+                SourceRef(
+                    name="kac_facility_file",
+                    kind=SourceKind.FILE_DATA,
+                    url=KAC_FACILITY_DOC_URL,
+                ),
+                SourceRef(
+                    name="kac_accessibility_file",
+                    kind=SourceKind.FILE_DATA,
+                    url=KAC_ACCESSIBILITY_DOC_URL,
+                ),
+            ]
+        ),
+        default_freshness=Freshness.DAILY if normalized_airport == "ICN" else Freshness.STATIC,
     )
 
 

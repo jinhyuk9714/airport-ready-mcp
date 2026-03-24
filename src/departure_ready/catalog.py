@@ -60,6 +60,7 @@ SUPPORT_MATRIX: dict[str, dict[str, object]] = {
             "crowd_info",
             "baggage",
             "customs",
+            "facilities",
         ],
     },
     AirportCode.CJJ.value: {
@@ -71,6 +72,7 @@ SUPPORT_MATRIX: dict[str, dict[str, object]] = {
             "crowd_info",
             "baggage",
             "customs",
+            "facilities",
         ],
     },
     AirportCode.TAE.value: {
@@ -82,6 +84,7 @@ SUPPORT_MATRIX: dict[str, dict[str, object]] = {
             "crowd_info",
             "baggage",
             "customs",
+            "facilities",
         ],
     },
 }

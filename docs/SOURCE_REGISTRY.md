@@ -16,6 +16,8 @@ Currently wired into connectors and public services:
 - `kac_flight_detail_rt`
 - `kac_processing_time`
 - `kac_crowd_info`
+- `kac_facility_file`
+- `kac_accessibility_file`
 - `iiac_parking_rt`
 - `iiac_parking_fee`
 - `iiac_t1_parking_slot`
@@ -32,9 +34,6 @@ Currently wired into connectors and public services:
 - `iiac_priority_lane`
 
 Tracked in the registry but not yet exposed in a public service or API route:
-- `kac_facility_file`
-- `kac_accessibility_file`
-
 ## Source tiers
 ### Tier A — live or near-live operational data
 Use first for operational answers.
@@ -59,7 +58,7 @@ Use first for operational answers.
 | `iiac_facilities` | IIAC terminal facilities | ICN | daily | pharmacy, ATM, lounge, nursery, etc. |
 | `iiac_shops` | IIAC commercial facilities | ICN | daily | shop lookup by category/name |
 | `kac_facility_file` | KAC airport facility file data | KAC airports | static/annual | facility fallback and metadata |
-| `kac_accessibility_file` | KAC accessibility facility maps | KAC airports | static-ish | wheelchair / accessibility hints |
+| `kac_accessibility_file` | KAC accessibility facility maps | KAC airports | static/annual | wheelchair / accessibility hints |
 
 ## Tier C — policy / rules
 | key | source | coverage | type | main use |
@@ -188,6 +187,22 @@ Use first for operational answers.
 - notes:
   - keep airline-specific constraints structured
   - keep ICN-only labeling explicit where applicable
+
+### 16) KAC airport facility file
+- portal id / doc: `15002685`
+- purpose: airport facility metadata and fallback structure for KAC airports
+- freshness label: `static`
+- notes:
+  - keep airport coverage explicit
+  - do not infer unsupported airport detail from other airport rows
+
+### 17) KAC accessibility facility maps
+- portal id / doc: `15105780`
+- purpose: wheelchair/accessibility-oriented facility locations
+- freshness label: `static`
+- notes:
+  - normalize accessibility categories explicitly
+  - preserve raw location text and do not guess missing terminal values
 
 ## Freshness mapping rules
 - real-time API -> `live`
