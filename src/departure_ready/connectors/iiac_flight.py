@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from departure_ready.connectors.base import (
     ConnectorContext,
@@ -59,7 +59,59 @@ class IiacFlightConnector(OfficialConnector):
         )
         return self.parse_forecast_payload(payload)
 
+    async def get_weekly_flights(
+        self,
+        travel_date: date | None = None,
+        flight_no: str | None = None,
+    ) -> list[FlightSnapshot]:
+        service_key = self.require_service_key()
+        params = {
+            "serviceKey": service_key,
+            "lang": "K",
+            "type": "json",
+        }
+        if flight_no:
+            params["flight_id"] = flight_no
+        payload = await self.get_payload(IIAC_WEEKLY_API_URL, params=params)
+        flights = self.parse_weekly_payload(payload)
+        if travel_date is None:
+            return flights
+        return [
+            flight
+            for flight in flights
+            if flight.scheduled_at is not None and flight.scheduled_at.date() == travel_date
+        ]
+
     def parse_today_payload(self, payload: dict) -> list[FlightSnapshot]:
+        return self._parse_flight_payload(
+            payload,
+            source_name=self.source_name,
+            source_url=self.source_url,
+            coverage_note="IIAC same-day passenger flight status",
+            freshness=Freshness.LIVE,
+            signal_kind="live",
+        )
+
+    def parse_weekly_payload(self, payload: dict) -> list[FlightSnapshot]:
+        return self._parse_flight_payload(
+            payload,
+            source_name="iiac_flight_weekly",
+            source_url=IIAC_WEEKLY_DOC_URL,
+            coverage_note="IIAC weekly passenger flight schedule",
+            freshness=Freshness.DAILY,
+            signal_kind="daily",
+        )
+
+    def _parse_flight_payload(
+        self,
+        payload: dict,
+        *,
+        source_name: str,
+        source_url: str,
+        coverage_note: str,
+        freshness: Freshness,
+        signal_kind: str,
+    ) -> list[FlightSnapshot]:
         rows = extract_items(payload)
         flights: list[FlightSnapshot] = []
         for row in rows:
@@ -82,16 +134,17 @@ class IiacFlightConnector(OfficialConnector):
                         "%Y-%m-%d %H:%M:%S",
                     ),
                     status_label=row.get("remark"),
-                    freshness=Freshness.LIVE,
+                    freshness=freshness,
                     updated_at=datetime.now().astimezone(),
                     source=[
                         SourceRef(
-                            name=self.source_name,
+                            name=source_name,
                             kind=SourceKind.OFFICIAL_API,
-                            url=self.source_url,
+                            url=source_url,
                         )
                     ],
-                    coverage_note="IIAC same-day passenger flight status",
+                    coverage_note=coverage_note,
+                    signal_kind=signal_kind,
                 )
             )
         return flights
