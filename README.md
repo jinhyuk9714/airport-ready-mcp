@@ -104,13 +104,15 @@ Render direct deployment is defined in `render.yaml`.
 Recommended runtime env:
 - `DEPARTURE_READY_ENV=prod`
 - `DEPARTURE_READY_PUBLIC_HTTP_URL=https://<your-service>.onrender.com`
-- `DEPARTURE_READY_PUBLIC_MCP_URL=https://<your-service>.onrender.com/mcp`
+- `DEPARTURE_READY_PUBLIC_MCP_URL=https://<your-service>.onrender.com/mcp` optional; falls back to `DEPARTURE_READY_PUBLIC_HTTP_URL/mcp`
 - `DEPARTURE_READY_KAC_SERVICE_KEY`
 - `DEPARTURE_READY_IIAC_SERVICE_KEY`
 
 Hosted canary workflow:
 - `.github/workflows/canary.yml`
 - runs local keyed smoke plus hosted HTTP/MCP checks
+- fails fast if `DEPARTURE_READY_PUBLIC_HTTP_URL`, `DEPARTURE_READY_KAC_SERVICE_KEY`, or `DEPARTURE_READY_IIAC_SERVICE_KEY` is missing
+- treats `DEPARTURE_READY_PUBLIC_MCP_URL` as optional and falls back to `DEPARTURE_READY_PUBLIC_HTTP_URL/mcp`
 - stores reports as GitHub Actions artifacts
 
 ## Verification

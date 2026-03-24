@@ -11,6 +11,7 @@
 - [ ] IIAC keys configured
 - [x] canary requests defined for each live source
 - [x] hosted canary workflow committed
+- [x] scheduled canary fails fast on missing required ops config
 - [x] timeout and retry settings reviewed
 - [x] schema drift watchlist documented
 
@@ -39,6 +40,7 @@
 - [x] Render blueprint committed
 - [x] public MCP URL falls back to `public_http_url + "/mcp"`
 - [x] CI validates smoke + hosted canary dry-run
+- [x] hosted canary treats `public_mcp_url` as optional
 
 ## Safety / trust
 - [x] no guessed live values

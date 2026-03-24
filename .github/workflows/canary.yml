@@ -19,6 +19,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Validate ops config and compute MCP fallback
+        shell: bash
+        run: |
+          missing=()
+          if [[ -z "${DEPARTURE_READY_PUBLIC_HTTP_URL}" ]]; then
+            missing+=("DEPARTURE_READY_PUBLIC_HTTP_URL")
+          fi
+          if [[ -z "${DEPARTURE_READY_KAC_SERVICE_KEY}" ]]; then
+            missing+=("DEPARTURE_READY_KAC_SERVICE_KEY")
+          fi
+          if [[ -z "${DEPARTURE_READY_IIAC_SERVICE_KEY}" ]]; then
+            missing+=("DEPARTURE_READY_IIAC_SERVICE_KEY")
+          fi
+          if ((${#missing[@]})); then
+            printf 'Missing required canary config: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          public_http_url="${DEPARTURE_READY_PUBLIC_HTTP_URL%/}"
+          public_mcp_url="${DEPARTURE_READY_PUBLIC_MCP_URL:-${public_http_url}/mcp}"
+          echo "DEPARTURE_READY_PUBLIC_MCP_URL=${public_mcp_url%/}" >> "$GITHUB_ENV"
       - run: uv sync --extra dev
       - run: uv run python -m departure_ready.smoke --mode smoke --output artifacts/local-smoke.json
       - run: uv run python -m departure_ready.smoke --mode hosted --output artifacts/hosted-canary.json

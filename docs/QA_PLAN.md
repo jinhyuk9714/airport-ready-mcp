@@ -58,6 +58,8 @@ Prevent confident-but-wrong travel guidance.
 - no-key bounded-unavailable smoke runner
 - keyed canary skip behavior
 - hosted canary dry-run without public URLs
+- scheduled canary fails fast when required ops config is missing
+- public MCP URL falls back from public HTTP URL in hosted runs
 - API app boot smoke
 - MCP stdio no-stdout-pollution smoke
 
