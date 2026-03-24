@@ -6,8 +6,14 @@ from departure_ready.catalog import CATALOG_SOURCE, normalize_airport_code
 from departure_ready.connectors.base import ConnectorContext
 from departure_ready.connectors.kac_processing import KacProcessingConnector
 from departure_ready.contracts import Envelope, Freshness, merge_response_meta
-from departure_ready.domain.models import OperationalSignal, ReadinessCard, ServiceEligibility
+from departure_ready.domain.models import (
+    FacilityMatch,
+    OperationalSignal,
+    ReadinessCard,
+    ServiceEligibility,
+)
 from departure_ready.services.baggage import build_baggage_decision
+from departure_ready.services.facilities import build_facilities_envelope
 from departure_ready.services.flight import FlightPayload, build_flight_envelope
 from departure_ready.services.parking import build_parking_envelope
 from departure_ready.services.self_service import (
@@ -41,12 +47,17 @@ def build_readiness_envelope(
     baggage_warnings = [build_baggage_decision(item, "international") for item in (items or [])]
     service_eligibility = _build_service_eligibility(normalized_airport, traveler_flags or [])
     operational_signals, signal_notes = _load_kac_operational_signals(normalized_airport, settings)
+    facility_hints, facility_notes = _load_facility_hints(
+        normalized_airport,
+        traveler_flags or [],
+        settings,
+    )
 
     flight = None
     operational_signal = "unavailable"
     summary = f"{normalized_airport} readiness is bounded by current official-source coverage."
     next_actions = ["Review flight status before leaving for the airport."]
-    trust_items = [*baggage_warnings, *service_eligibility, *operational_signals]
+    trust_items = [*baggage_warnings, *service_eligibility, *operational_signals, *facility_hints]
 
     if flight_envelope.ok:
         flight_payload: FlightPayload = flight_envelope.data
@@ -69,6 +80,8 @@ def build_readiness_envelope(
         next_actions.extend(_operational_signal_actions(operational_signals))
     if signal_notes:
         next_actions.extend(signal_notes)
+    if facility_notes:
+        next_actions.extend(facility_notes)
 
     parking = None
     if parking_envelope is not None and parking_envelope.ok:
@@ -105,7 +118,7 @@ def build_readiness_envelope(
         parking=parking,
         baggage_warnings=baggage_warnings,
         service_eligibility=service_eligibility,
-        facility_hints=[],
+        facility_hints=facility_hints,
         source=meta.source,
         freshness=meta.freshness,
         updated_at=meta.updated_at,
@@ -220,3 +233,56 @@ def _build_service_eligibility(
             coverage_note=priority.coverage_note,
         ),
     ]
+
+
+def _load_facility_hints(
+    airport_code: str,
+    traveler_flags: list[str],
+    settings: Settings,
+) -> tuple[list[FacilityMatch], list[str]]:
+    categories = _facility_hint_categories(traveler_flags)
+    if not categories:
+        return [], []
+
+    hints: list[FacilityMatch] = []
+    try:
+        for category in categories:
+            envelope = _await_if_needed(
+                build_facilities_envelope(
+                    settings,
+                    airport_code,
+                    category=category,
+                )
+            )
+            if not envelope.ok:
+                return [], [f"Official facility lookup unavailable for {airport_code}."]
+            for match in envelope.data.matches:
+                if _facility_hint_key(match) in {_facility_hint_key(item) for item in hints}:
+                    continue
+                hints.append(match)
+                if len(hints) >= 3:
+                    return hints[:3], []
+    except Exception:  # noqa: BLE001
+        return [], [f"Official facility lookup unavailable for {airport_code}."]
+
+    return hints[:3], []
+
+
+def _facility_hint_categories(traveler_flags: list[str]) -> list[str]:
+    normalized_flags = {flag.strip().lower() for flag in traveler_flags if flag.strip()}
+    categories: list[str] = []
+    if normalized_flags & {"disabled", "wheelchair", "mobility_impaired", "accessibility"}:
+        categories.extend(["accessibility", "medical", "parking"])
+    if normalized_flags & {"pregnant", "infant", "child", "medical"}:
+        categories.extend(["nursery", "family", "medical", "restroom"])
+    return list(dict.fromkeys(categories))
+
+
+def _facility_hint_key(match: FacilityMatch) -> tuple[str, str | None, str, str, str]:
+    return (
+        match.airport_code,
+        match.terminal,
+        match.name,
+        match.location_text,
+        match.category,
+    )
