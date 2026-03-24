@@ -32,12 +32,15 @@ def build_guide_envelope() -> Envelope[GuidePayload]:
             "keep parking, baggage, customs, and service eligibility separate",
             "label live vs forecast vs policy data explicitly",
             "support future-dated ICN flight lookups only through flight-status surfaces",
+            "surface official facility and accessibility lookups for ICN "
+            "and supported KAC airports",
         ],
         out_of_scope=[
             "generic map routing",
             "travel visa advice",
             "non-official airport crowd guesses",
             "future-dated readiness cards outside same-day operational coverage",
+            "always-on facility hints without traveler intent",
         ],
     )
     return Envelope(

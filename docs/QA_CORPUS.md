@@ -46,4 +46,18 @@ Expected:
 - response uses `freshness=daily`
 - gate/check-in are not invented when the weekly source does not provide them
 
+8. "김해공항에서 휠체어 도움 받을 수 있는 시설 어디 있어?"
+Expected:
+- `/v1/facilities?airport_code=PUS&category=wheelchair`
+- response stays `ok=true` for supported KAC facilities coverage
+- category alias resolves to accessibility-oriented official results
+- if the official source is unavailable, the response stays bounded and does not flip to unsupported
+
+9. "아이 데리고 김포공항 가는데 어디 먼저 봐야 해?"
+Expected:
+- `/v1/readiness?airport_code=GMP&traveler_flags=child`
+- readiness stays same-day only
+- `facility_hints` can include family/nursery/medical hints from official facility data
+- if facility lookup is unavailable, `facility_hints=[]` and the response says so explicitly
+
 The automated version of this corpus lives in `tests/test_qa_corpus.py`.

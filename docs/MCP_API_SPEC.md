@@ -130,6 +130,10 @@ Returns:
 - location text
 - operating hours
 - phone
+- KAC official facility/accessibility coverage is available for `GMP`, `CJU`, `PUS`, `CJJ`, and `TAE`
+- category aliases such as `wheelchair`, `disabled`, and `barrier-free` map to `accessibility`
+- KAC facility/accessibility results use `freshness=static`
+- supported KAC airport outages return bounded empty/unavailable responses, not `unsupported`
 
 ### `GET /v1/shops`
 Query:
@@ -144,6 +148,9 @@ Returns:
 - location text
 - operating hours
 - phone
+
+Notes:
+- shops remain officially supported for `ICN` only in this wave
 
 ### `GET /v1/readiness`
 Query:
@@ -161,10 +168,13 @@ Returns:
 - service eligibility
 - baggage warnings
 - terminal/service lookup hints
+- `facility_hints` only when `traveler_flags` imply accessibility, family, infant, or medical intent
+- `going_by_car=true` by itself does not trigger general facility hints
 
 Notes:
 - this wave keeps readiness current-day only
 - future schedule support lives in `GET /v1/flight-status`, not in readiness
+- supported facility-source outages leave `facility_hints=[]` and add an explicit unavailable note instead of guessing
 
 ---
 
@@ -191,6 +201,11 @@ Remote transport:
 - `travel_date` optional (`YYYY-MM-DD`)
 
 Future-dated official flight support is limited to `ICN` in the current wave.
+
+`tool_find_facilities` notes:
+- same airport/category/query semantics as `GET /v1/facilities`
+- KAC accessibility aliases such as `wheelchair` and `disabled` normalize to `accessibility`
+- `tool_find_shops` remains ICN-only
 
 ## MCP tool output rule
 Tool outputs should stay structured and short.

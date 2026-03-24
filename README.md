@@ -12,6 +12,8 @@
 ## Current scope
 - strong support: `ICN`, `GMP`, `CJU`
 - selected support: `PUS`, `CJJ`, `TAE`
+- official facility/accessibility lookup: `ICN`, `GMP`, `CJU`, `PUS`, `CJJ`, `TAE`
+- shops lookup: `ICN` only
 - future-dated official flight support: `ICN` only via `/v1/flight-status` and `tool_get_flight_status`
 - remote MCP transport: `streamable-http` mounted at `/mcp`
 - HTTP endpoints:
@@ -48,6 +50,7 @@
 - ICN parking responses can include fee criteria notes without inventing numeric fee estimates.
 - KAC parking responses can include separate `policy_notes` from official discount/reservation guidance.
 - KAC readiness can include official processing/crowd signals when coverage exists.
+- Readiness facility hints are intent-based and only appear for relevant `traveler_flags`.
 - Future-dated readiness is intentionally out of scope; only `flight-status` supports official future ICN schedules in this wave.
 
 ## Quick start
@@ -83,6 +86,16 @@ curl "http://127.0.0.1:8000/v1/flight-status?airport_code=ICN&travel_date=2026-0
 ```
 
 `/v1/readiness` stays same-day only and does not accept `travel_date`.
+
+KAC accessibility lookup example:
+```bash
+curl "http://127.0.0.1:8000/v1/facilities?airport_code=GMP&category=wheelchair"
+```
+
+Intent-based readiness hint example:
+```bash
+curl "http://127.0.0.1:8000/v1/readiness?airport_code=GMP&traveler_flags=wheelchair"
+```
 
 ## Render deploy
 
