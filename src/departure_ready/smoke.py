@@ -293,29 +293,45 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
     if settings.iiac_service_key:
         checks.extend(
             [
-                _parking_contract_check(
+                _safe_canary_check(
                     name="iiac_parking_canary",
-                    envelope=build_parking_envelope("ICN", settings=settings),
-                    require_lots=True,
-                ),
-                _flight_contract_check(
-                    name="iiac_future_flight_canary",
-                    envelope=build_flight_envelope(
-                        "ICN",
-                        travel_date=tomorrow,
-                        settings=settings,
+                    envelope_factory=lambda: build_parking_envelope("ICN", settings=settings),
+                    evaluator=lambda envelope: _parking_contract_check(
+                        name="iiac_parking_canary",
+                        envelope=envelope,
+                        require_lots=True,
                     ),
-                    disallow_unavailable=True,
                 ),
-                _facility_contract_check(
+                _safe_canary_check(
+                    name="iiac_future_flight_canary",
+                    envelope_factory=lambda: build_flight_envelope(
+                        "ICN", travel_date=tomorrow, settings=settings
+                    ),
+                    evaluator=lambda envelope: _flight_contract_check(
+                        name="iiac_future_flight_canary",
+                        envelope=envelope,
+                        disallow_unavailable=True,
+                    ),
+                ),
+                _safe_canary_check(
                     name="iiac_facilities_canary",
-                    envelope=asyncio.run(build_facilities_envelope(settings, "ICN")),
-                    require_matches=True,
+                    envelope_factory=lambda: asyncio.run(
+                        build_facilities_envelope(settings, "ICN")
+                    ),
+                    evaluator=lambda envelope: _facility_contract_check(
+                        name="iiac_facilities_canary",
+                        envelope=envelope,
+                        require_matches=True,
+                    ),
                 ),
-                _facility_contract_check(
+                _safe_canary_check(
                     name="iiac_shops_canary",
-                    envelope=asyncio.run(build_shops_envelope(settings, "ICN")),
-                    require_matches=True,
+                    envelope_factory=lambda: asyncio.run(build_shops_envelope(settings, "ICN")),
+                    evaluator=lambda envelope: _facility_contract_check(
+                        name="iiac_shops_canary",
+                        envelope=envelope,
+                        require_matches=True,
+                    ),
                 ),
             ]
         )
@@ -332,26 +348,38 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
     if settings.kac_service_key:
         checks.extend(
             [
-                _parking_contract_check(
+                _safe_canary_check(
                     name="kac_parking_canary",
-                    envelope=build_parking_envelope("GMP", settings=settings),
-                    require_lots=True,
+                    envelope_factory=lambda: build_parking_envelope("GMP", settings=settings),
+                    evaluator=lambda envelope: _parking_contract_check(
+                        name="kac_parking_canary",
+                        envelope=envelope,
+                        require_lots=True,
+                    ),
                 ),
-                _readiness_contract_check(
+                _safe_canary_check(
                     name="kac_readiness_canary",
-                    envelope=build_readiness_envelope("GMP", settings=settings),
-                    require_operational_signals=True,
+                    envelope_factory=lambda: build_readiness_envelope("GMP", settings=settings),
+                    evaluator=lambda envelope: _readiness_contract_check(
+                        name="kac_readiness_canary",
+                        envelope=envelope,
+                        require_operational_signals=True,
+                    ),
                 ),
-                _facility_contract_check(
+                _safe_canary_check(
                     name="kac_facilities_canary",
-                    envelope=asyncio.run(
+                    envelope_factory=lambda: asyncio.run(
                         build_facilities_envelope(
                             settings,
                             "PUS",
                             category="wheelchair",
                         )
                     ),
-                    require_matches=True,
+                    evaluator=lambda envelope: _facility_contract_check(
+                        name="kac_facilities_canary",
+                        envelope=envelope,
+                        require_matches=True,
+                    ),
                 ),
             ]
         )
@@ -366,6 +394,23 @@ def _keyed_canary_checks(settings: Settings) -> list[dict[str, object]]:
         )
 
     return checks
+
+
+def _safe_canary_check(
+    *,
+    name: str,
+    envelope_factory: Callable[[], Any],
+    evaluator: Callable[[Any], dict[str, object]],
+) -> dict[str, object]:
+    try:
+        envelope = envelope_factory()
+    except Exception as exc:  # noqa: BLE001
+        return _check(
+            name=name,
+            ok=False,
+            detail=f"Official source check failed: {exc}",
+        )
+    return evaluator(envelope)
 
 
 def _hosted_ops_config_check(settings: Settings) -> dict[str, object]:
@@ -698,6 +743,14 @@ def _parking_contract_check(
     envelope,
     require_lots: bool = False,
 ) -> dict[str, object]:
+    if not envelope.ok:
+        return _check(
+            name=name,
+            ok=False,
+            detail=_envelope_message(envelope),
+            coverage_note=envelope.meta.coverage_note,
+            freshness=_freshness_value(envelope.meta.freshness),
+        )
     ok = envelope.ok and bool(envelope.meta.source)
     if _note_mentions_unavailable(envelope.meta.coverage_note):
         ok = False
@@ -718,6 +771,14 @@ def _flight_contract_check(
     envelope,
     disallow_unavailable: bool = False,
 ) -> dict[str, object]:
+    if not envelope.ok:
+        return _check(
+            name=name,
+            ok=False,
+            detail=_envelope_message(envelope),
+            coverage_note=envelope.meta.coverage_note,
+            freshness=_freshness_value(envelope.meta.freshness),
+        )
     ok = envelope.ok and bool(envelope.meta.source)
     if disallow_unavailable and envelope.data.status == "unavailable":
         ok = False
@@ -741,6 +802,15 @@ def _facility_contract_check(
     envelope,
     require_matches: bool = False,
 ) -> dict[str, object]:
+    if not envelope.ok:
+        return _check(
+            name=name,
+            ok=False,
+            detail=_envelope_message(envelope),
+            coverage_note=envelope.meta.coverage_note,
+            freshness=_freshness_value(envelope.meta.freshness),
+            matches=0,
+        )
     ok = envelope.ok and bool(envelope.meta.source)
     if _note_mentions_unavailable(envelope.meta.coverage_note):
         ok = False
@@ -762,6 +832,15 @@ def _readiness_contract_check(
     envelope,
     require_operational_signals: bool = False,
 ) -> dict[str, object]:
+    if not envelope.ok:
+        return _check(
+            name=name,
+            ok=False,
+            detail=_envelope_message(envelope),
+            coverage_note=envelope.meta.coverage_note,
+            freshness=_freshness_value(envelope.meta.freshness),
+            operational_signals=0,
+        )
     ok = envelope.ok and bool(envelope.meta.source)
     if require_operational_signals and not envelope.data.operational_signals:
         ok = False
@@ -966,6 +1045,14 @@ def _dig(payload: dict[str, Any], path: str) -> Any:
         else:
             return None
     return current
+
+
+def _envelope_message(envelope) -> str:
+    return getattr(envelope.data, "message", envelope.meta.coverage_note)
+
+
+def _freshness_value(freshness: Any) -> Any:
+    return getattr(freshness, "value", freshness)
 
 
 def _report_from_checks(checks: list[dict[str, object]]) -> dict[str, object]:

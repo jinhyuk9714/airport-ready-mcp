@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from departure_ready.api.app import create_app
+from departure_ready.settings import get_settings
 
 
 def test_qa_corpus_readiness_for_gmp_family_trip_stays_bounded():
@@ -77,7 +78,10 @@ def test_qa_corpus_priority_lane_stays_icn_only():
     assert "ICN-only" in payload["meta"]["coverage_note"]
 
 
-def test_qa_corpus_supported_airport_parking_avoids_fake_live_fallback():
+def test_qa_corpus_supported_airport_parking_avoids_fake_live_fallback(monkeypatch):
+    monkeypatch.setenv("DEPARTURE_READY_KAC_SERVICE_KEY", "")
+    monkeypatch.setenv("DEPARTURE_READY_IIAC_SERVICE_KEY", "")
+    get_settings.cache_clear()
     client = TestClient(create_app())
 
     response = client.get("/v1/parking", params={"airport_code": "ICN"})
@@ -87,3 +91,4 @@ def test_qa_corpus_supported_airport_parking_avoids_fake_live_fallback():
     assert payload["ok"] is True
     assert payload["data"]["lots"] == []
     assert "currently unavailable" in payload["meta"]["coverage_note"]
+    get_settings.cache_clear()

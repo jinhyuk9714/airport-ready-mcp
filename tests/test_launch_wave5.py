@@ -64,13 +64,43 @@ def _facility_envelope(airport_code: str) -> SimpleNamespace:
     )
 
 
+def _error_envelope(*, coverage_note: str, message: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        ok=False,
+        meta=_meta(coverage_note=coverage_note, freshness=Freshness.STATIC),
+        data=SimpleNamespace(message=message, code="live_source_unavailable"),
+    )
+
+
 async def _async_facility_envelope(settings, airport_code: str, **kwargs) -> SimpleNamespace:
     _ = settings, kwargs
     return _facility_envelope(airport_code)
 
 
-def test_hosted_canary_strict_fails_without_required_ops_config():
-    report = smoke.build_hosted_canary_report(Settings(env="test"), strict=True)
+async def _raising_async_facility_envelope(
+    settings,
+    airport_code: str,
+    **kwargs,
+) -> SimpleNamespace:
+    _ = settings, airport_code, kwargs
+    raise RuntimeError("kac_facility_file parse failed")
+
+
+def test_hosted_canary_strict_fails_without_required_ops_config(monkeypatch):
+    monkeypatch.delenv("DEPARTURE_READY_PUBLIC_HTTP_URL", raising=False)
+    monkeypatch.delenv("DEPARTURE_READY_PUBLIC_MCP_URL", raising=False)
+    monkeypatch.delenv("DEPARTURE_READY_KAC_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("DEPARTURE_READY_IIAC_SERVICE_KEY", raising=False)
+    report = smoke.build_hosted_canary_report(
+        Settings(
+            env="test",
+            public_http_url=None,
+            public_mcp_url=None,
+            kac_service_key=None,
+            iiac_service_key=None,
+        ),
+        strict=True,
+    )
 
     assert report["ok"] is False
     config = report["checks"][0]
@@ -148,3 +178,66 @@ def test_smoke_report_expands_keyed_canary_breadth(monkeypatch):
         "kac_readiness_canary",
         "kac_facilities_canary",
     }.issubset(names)
+
+
+def test_smoke_report_marks_failed_live_canary_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        "build_parking_envelope",
+        lambda *args, **kwargs: _parking_envelope(args[0]),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "build_flight_envelope",
+        lambda *args, **kwargs: _error_envelope(
+            coverage_note="Official flight data for ICN is unavailable right now.",
+            message="iiac_flight_weekly returned 401",
+        ),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "build_readiness_envelope",
+        lambda *args, **kwargs: _readiness_envelope(args[0]),
+    )
+    monkeypatch.setattr(smoke, "build_facilities_envelope", _async_facility_envelope)
+    monkeypatch.setattr(smoke, "build_shops_envelope", _async_facility_envelope)
+
+    report = smoke.build_smoke_report(
+        Settings(env="test", kac_service_key="kac-key", iiac_service_key="iiac-key")
+    )
+    checks = {check["name"]: check for check in report["checks"]}
+
+    assert report["ok"] is False
+    assert checks["iiac_future_flight_canary"]["ok"] is False
+    assert checks["iiac_future_flight_canary"]["status"] == "fail"
+    assert "401" in checks["iiac_future_flight_canary"]["detail"]
+
+
+def test_smoke_report_marks_failed_facility_canary_without_crashing(monkeypatch):
+    monkeypatch.setattr(
+        smoke,
+        "build_parking_envelope",
+        lambda *args, **kwargs: _parking_envelope(args[0]),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "build_flight_envelope",
+        lambda *args, **kwargs: _flight_envelope(args[0]),
+    )
+    monkeypatch.setattr(
+        smoke,
+        "build_readiness_envelope",
+        lambda *args, **kwargs: _readiness_envelope(args[0]),
+    )
+    monkeypatch.setattr(smoke, "build_facilities_envelope", _raising_async_facility_envelope)
+    monkeypatch.setattr(smoke, "build_shops_envelope", _async_facility_envelope)
+
+    report = smoke.build_smoke_report(
+        Settings(env="test", kac_service_key="kac-key", iiac_service_key="iiac-key")
+    )
+    checks = {check["name"]: check for check in report["checks"]}
+
+    assert report["ok"] is False
+    assert checks["kac_facilities_canary"]["ok"] is False
+    assert checks["kac_facilities_canary"]["status"] == "fail"
+    assert "parse failed" in checks["kac_facilities_canary"]["detail"]

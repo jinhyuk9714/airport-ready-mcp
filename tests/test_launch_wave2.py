@@ -1,28 +1,25 @@
 from __future__ import annotations
 
-import os
 import subprocess
-import sys
-from pathlib import Path
 
 from departure_ready import smoke
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def _python_env() -> dict[str, str]:
-    env = os.environ.copy()
-    src_path = str(ROOT / "src")
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = f"{src_path}{os.pathsep}{existing}" if existing else src_path
-    return env
 
 
 def test_smoke_runner_skips_keyed_canaries_without_env(monkeypatch):
     monkeypatch.delenv("DEPARTURE_READY_KAC_SERVICE_KEY", raising=False)
     monkeypatch.delenv("DEPARTURE_READY_IIAC_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("DEPARTURE_READY_PUBLIC_HTTP_URL", raising=False)
+    monkeypatch.delenv("DEPARTURE_READY_PUBLIC_MCP_URL", raising=False)
 
-    report = smoke.build_smoke_report()
+    report = smoke.build_smoke_report(
+        smoke.Settings(
+            env="test",
+            kac_service_key=None,
+            iiac_service_key=None,
+            public_http_url=None,
+            public_mcp_url=None,
+        )
+    )
 
     assert report["ok"] is True
     assert any(
@@ -48,29 +45,31 @@ def test_smoke_runner_skips_keyed_canaries_without_env(monkeypatch):
 
 
 def test_api_app_boot_smoke_via_subprocess():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "from departure_ready.api.app import create_app; "
-                "app = create_app(); "
-                "assert '/healthz' in {route.path for route in app.routes}; "
-                "print('api-ready')"
-            ),
-        ],
-        cwd=ROOT,
-        env=_python_env(),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    report = smoke.check_api_boot()
 
-    assert "api-ready" in result.stdout
-    assert result.stderr == ""
+    assert report["ok"] is True
+    assert "/healthz" in report["routes"]
+    assert "/mcp" in report["routes"]
 
 
-def test_mcp_stdio_boot_smoke_has_no_stdout_pollution():
+def test_mcp_stdio_boot_smoke_has_no_stdout_pollution(monkeypatch):
+    class FakeProcess:
+        returncode = -15
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired(cmd=["departure-ready-mcp"], timeout=timeout)
+
+        def terminate(self):
+            self.returncode = -15
+
+        def communicate(self, timeout=None):
+            _ = timeout
+            return "", ""
+
+        def kill(self):
+            self.returncode = -9
+
+    monkeypatch.setattr(smoke.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     report = smoke.check_mcp_stdio_boot(timeout_sec=0.5)
 
     assert report["started"] is True
