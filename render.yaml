@@ -2,7 +2,7 @@ services:
   - type: web
     name: departure-ready-mcp
     runtime: python
-    plan: starter
+    plan: free
     autoDeployTrigger: commit
     buildCommand: uv sync
     startCommand: uv run departure-ready-api
